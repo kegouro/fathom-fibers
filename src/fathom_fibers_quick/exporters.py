@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import html
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from .analysis import (
     get_fiber_extrema,
     section_level_summary,
 )
+from .measurement_records import MeasurementRecord
 from .model import Project
 
 GROUP_COLORS = [
@@ -25,38 +27,117 @@ GROUP_COLORS = [
 ]
 
 
-def export_csv(project: Project, path: str | Path) -> Path:
+def export_csv(
+    project: Project,
+    path: str | Path,
+    records: Sequence[MeasurementRecord] | None = None,
+) -> Path:
+    """Exports unified measurement records to CSV according to Section 16."""
     path = Path(path)
+    target_records = records if records is not None else project.records
+
     rows = []
-    for m in project.measurements:
+    for r in target_records:
+        val_m = r.primary_value
+        unit = r.primary_unit
+
+        length_m = r.values.get("length_m")
+        proj_w_m = r.values.get("width_m") if r.kind == "PROJECTED_WIDTH" else None
+        angle_deg = r.values.get("interior_angle_deg")
+        area_m2 = r.values.get("area_m2")
+        perimeter_m = r.values.get("perimeter_m")
+        tortuosity = r.values.get("tortuosity")
+        mean_int = r.values.get("mean_intensity_au") or r.values.get("mean_intensity")
+        std_int = r.values.get("std_intensity_au")
+
         rows.append({
-            "measurement_id": m.measurement_id,
-            "fiber_id": m.fiber_id,
-            "method": m.method,
-            "accepted": m.accepted,
-            "width_m": m.width_m,
-            "width_um": m.width_m * 1e6,
-            "width_nm": m.width_m * 1e9,
-            "p1_x_px": m.p1[0],
-            "p1_y_px": m.p1[1],
-            "p2_x_px": m.p2[0],
-            "p2_y_px": m.p2[1],
-            "group": m.group,
-            "confidence": m.confidence,
-            "defect": m.defect,
-            "note": m.note,
-            "created_at": m.created_at,
-            "source_image": project.image.path,
-            "source_sha256": project.image.source_sha256,
-            "pixel_size_x_m": project.image.calibration.pixel_size_x_m,
-            "pixel_size_y_m": project.image.calibration.pixel_size_y_m,
-            "calibration_source": project.image.calibration.source,
+            "measurement_id": r.measurement_id,
+            "name": r.name,
+            "kind": r.kind.value if hasattr(r.kind, "value") else str(r.kind),
+            "status": r.status.value if hasattr(r.status, "value") else str(r.status),
+            "source": r.source.value if hasattr(r.source, "value") else str(r.source),
+            "image_id": r.image_id or project.image.path,
+            "sample_id": r.sample_id or "",
+            "fiber_id": r.fiber_id or "",
+            "roi_id": r.roi_id or "",
+            "primary_value": val_m if val_m is not None else "",
+            "primary_unit": unit,
+            "tags": ", ".join(r.tags),
+            "notes": r.notes,
+            "quality_flags": ";".join(r.quality_flags),
+            "created_at": r.created_at,
+            "updated_at": r.updated_at,
+            "length_m": length_m if length_m is not None else "",
+            "projected_width_m": proj_w_m if proj_w_m is not None else "",
+            "angle_deg": angle_deg if angle_deg is not None else "",
+            "area_m2": area_m2 if area_m2 is not None else "",
+            "perimeter_m": perimeter_m if perimeter_m is not None else "",
+            "tortuosity": tortuosity if tortuosity is not None else "",
+            "mean_intensity": mean_int if mean_int is not None else "",
+            "std_intensity": std_int if std_int is not None else "",
         })
+
     path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "measurement_id",
+        "name",
+        "kind",
+        "status",
+        "source",
+        "image_id",
+        "sample_id",
+        "fiber_id",
+        "roi_id",
+        "primary_value",
+        "primary_unit",
+        "tags",
+        "notes",
+        "quality_flags",
+        "created_at",
+        "updated_at",
+        "length_m",
+        "projected_width_m",
+        "angle_deg",
+        "area_m2",
+        "perimeter_m",
+        "tortuosity",
+        "mean_intensity",
+        "std_intensity",
+    ]
+
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()) if rows else ["measurement_id"])
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+    return path
+
+
+def export_profile_csv(record: MeasurementRecord, path: str | Path) -> Path:
+    """Exports raw and smoothed intensity profile data points to CSV."""
+    path = Path(path)
+    dists = record.values.get("distance_m", [])
+    raws = record.values.get("profile_raw", [])
+    smooths = record.values.get("profile_smoothed", [])
+
+    rows = []
+    for i in range(len(raws)):
+        d_m = dists[i] if i < len(dists) else i
+        r_v = raws[i]
+        s_v = smooths[i] if i < len(smooths) else r_v
+        rows.append({
+            "distance_m": d_m,
+            "raw_intensity": r_v,
+            "averaged_intensity": r_v,
+            "smoothed_intensity": s_v,
+        })
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["distance_m", "raw_intensity", "averaged_intensity", "smoothed_intensity"])
+        writer.writeheader()
+        writer.writerows(rows)
+
     return path
 
 
@@ -77,7 +158,6 @@ def export_annotated(
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default(size=14)
 
-    # Shaded footer if present
     if project.image.footer_bounds:
         y0, y1 = project.image.footer_bounds
         draw.rectangle([0, y0, image.width, y1], fill=(40, 40, 40, 180), outline=(255, 100, 100), width=2)
@@ -85,7 +165,7 @@ def export_annotated(
 
     extrema_by_m: dict[str, list[str]] = {}
     if show_extrema:
-        fibers = {m.fiber_id for m in project.measurements}
+        fibers = {m.fiber_id for m in project.measurements if m.fiber_id}
         for fid in fibers:
             f_ext = get_fiber_extrema(project.measurements, fid)
             for mid, labels in f_ext.items():
@@ -106,7 +186,7 @@ def export_annotated(
 
         parts = []
         if show_ids:
-            parts.append(measurement.fiber_id)
+            parts.append(measurement.fiber_id or measurement.measurement_id)
         if show_values:
             parts.append(f"{measurement.width_m * 1e6:.3f} µm")
         if show_defects and measurement.defect != "None":
@@ -127,7 +207,6 @@ def export_annotated(
                 stroke_fill=(0, 0, 0),
             )
 
-    # Header summary overlay
     f_stats = fiber_level_summary(project.measurements)
     if f_stats["n_fibers"] > 0:
         med_str = format_length_m(float(f_stats["median_m"])) if f_stats["median_m"] else "—"
@@ -140,7 +219,6 @@ def export_annotated(
         draw.rectangle([10, 10, 520, 50], fill=(0, 0, 0, 180), outline=(255, 255, 255))
         draw.text((16, 14), summary_text, fill=(255, 255, 255), font=font)
 
-    # Legend if requested
     if show_legend:
         group_names = project.group_names
         legend_y = 60

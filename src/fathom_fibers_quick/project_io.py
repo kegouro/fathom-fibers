@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from .measurement_geometry import (
+    compute_angle_geometry,
+    compute_polyline_geometry,
+)
+from .measurement_records import MeasurementKind
 from .model import Project, compute_measurement_width
 from .zeiss import file_sha256
 
@@ -64,19 +69,36 @@ def verify_project_source(project: Project) -> SourceVerificationResult:
 
 
 def recalculate_and_validate_project(project: Project, tolerance: float = 1e-12) -> int:
-    """Recalculate width_m from geometry & calibration for all measurements in project.
+    """Recalculate derived values from geometry & calibration for all records in project.
 
-    Returns the number of measurements whose stored width_m differed beyond tolerance.
+    Returns the number of records whose derived values differed beyond tolerance.
     """
     corrections_count = 0
     calibration = project.image.calibration
     calibration.validate()
 
-    for measurement in project.measurements:
-        recalculated_width = compute_measurement_width(measurement.p1, measurement.p2, calibration)
-        if not math.isclose(measurement.width_m, recalculated_width, abs_tol=tolerance, rel_tol=1e-5):
-            measurement.width_m = recalculated_width
-            corrections_count += 1
+    for r in project.records:
+        if r.kind in {MeasurementKind.PROJECTED_WIDTH, MeasurementKind.DISTANCE}:
+            p1, p2 = r.p1, r.p2
+            recalc_m = compute_measurement_width(p1, p2, calibration)
+            old_val = r.primary_value or 0.0
+            if not math.isclose(old_val, recalc_m, abs_tol=tolerance, rel_tol=1e-5):
+                r.values["length_m"] = recalc_m
+                r.values["width_m"] = recalc_m
+                corrections_count += 1
+
+        elif r.kind == MeasurementKind.POLYLINE_LENGTH:
+            pts = r.geometry.get("points", [])
+            poly_info = compute_polyline_geometry(pts, calibration)
+            r.values.update(poly_info)
+
+        elif r.kind == MeasurementKind.ANGLE:
+            pt_a = r.geometry.get("pt_a", (0.0, 0.0))
+            pt_b = r.geometry.get("pt_b", (0.0, 0.0))
+            pt_c = r.geometry.get("pt_c", (0.0, 0.0))
+            ang_info = compute_angle_geometry(pt_a, pt_b, pt_c, calibration)
+            r.values.update(ang_info)
+
     return corrections_count
 
 
