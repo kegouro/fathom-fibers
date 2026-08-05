@@ -16,4 +16,5 @@ build/
 *.csv
 *.html
 *_annotated.png
-*.tmp
+local_results/
+local_data/

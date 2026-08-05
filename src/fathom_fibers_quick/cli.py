@@ -74,6 +74,10 @@ def main() -> None:
     inventory.add_argument("directory")
     inventory.add_argument("--output", "-o", default="zeiss_inventory.csv")
 
+    eval_roi = sub.add_parser("evaluate-auto-roi", help="Evaluate Auto-ROI campaign on Zeiss TIFFs")
+    eval_roi.add_argument("--input-dir", "-i", default="local_data/zeiss")
+    eval_roi.add_argument("--output-dir", "-o", default="local_results/auto_roi_campaign")
+
     args = parser.parse_args()
     if args.command in {None, "gui"}:
         from .app import FiberQuickApp
@@ -82,6 +86,12 @@ def main() -> None:
         return
     if args.command == "inspect":
         raise SystemExit(_inspect(args.paths, args.hash))
+    if args.command == "evaluate-auto-roi":
+        from scripts.evaluate_auto_roi import run_campaign
+        search_dirs = [Path(args.input_dir), Path("/home/kegouro/HIBRIS/Workshop ⁄ Proyectos")]
+        res = run_campaign(search_dirs, Path(args.output_dir))
+        print(f"Informe de evaluación de campaña Auto-ROI: {res}")
+        return
     if args.command == "plugins":
         from .plugin_registry import discover_classical, discover_models
         payload = {

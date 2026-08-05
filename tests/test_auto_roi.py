@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import numpy as np
 
-from fathom_fibers_quick.auto_roi import AutoFiberCandidate, analyze_roi, otsu_threshold
+from fathom_fibers_quick.auto_roi import (
+    PRESET_HIGH_MAG_FINE,
+    PRESET_MID_MAG_GENERAL,
+    AutoFiberCandidate,
+    ResolutionPreset,
+    analyze_roi,
+    check_resolution_resolvability,
+    get_preset_for_calibration,
+    otsu_threshold,
+)
 from fathom_fibers_quick.model import Calibration, ImageDocument, Measurement, Project
 
 
@@ -13,9 +22,95 @@ def test_otsu_threshold_synthetic():
     assert 90 <= th <= 160
 
 
+def test_gradient_background_and_irregular_illumination():
+    y, x = np.ogrid[:150, :150]
+    gradient_bg = (x * 0.5 + y * 0.3).astype(np.float32)
+    gray = gradient_bg.copy()
+    # Bright fiber
+    gray[20:130, 65:85] += 120.0
+    cal = Calibration(1e-9, 1e-9, "test")
+
+    candidates, _summary = analyze_roi(
+        gray=gray,
+        roi_bbox=(10, 10, 140, 140),
+        calibration=cal,
+        threshold_method="Local Adaptativo",
+        polarity="bright",
+    )
+    assert len(candidates) >= 1
+    assert candidates[0].median_width_m is not None
+
+
+def test_curved_component_tracing():
+    gray = np.full((160, 160), 20.0, dtype=np.float32)
+    # Draw curved arc
+    for y_idx in range(20, 140):
+        x_idx = int(70 + 25 * np.sin((y_idx - 20) / 30.0))
+        gray[y_idx, max(0, x_idx - 6) : min(160, x_idx + 6)] = 220.0
+
+    cal = Calibration(1e-9, 1e-9, "test")
+    candidates, _summary = analyze_roi(
+        gray=gray,
+        roi_bbox=(5, 5, 155, 155),
+        calibration=cal,
+        allow_curved_trace=True,
+    )
+    assert len(candidates) >= 1
+    cand = candidates[0]
+    assert cand.curved_trace_used or "CURVED_TRACE_USED" in cand.quality_flags
+
+
+def test_merged_fibers_likely_merged_flag():
+    gray = np.full((160, 160), 20.0, dtype=np.float32)
+    # Huge merged block
+    gray[30:130, 40:120] = 220.0
+    cal = Calibration(1e-9, 1e-9, "test")
+
+    candidates, _summary = analyze_roi(
+        gray=gray,
+        roi_bbox=(10, 10, 150, 150),
+        calibration=cal,
+        preset=PRESET_MID_MAG_GENERAL,
+    )
+    assert len(candidates) >= 1
+    assert "LIKELY_MERGED" in candidates[0].quality_flags
+
+
+def test_resolution_resolvability_gate():
+    roi = np.full((100, 100), 50, dtype=np.float32)
+    cal_low = Calibration(50e-9, 50e-9, "low_mag")  # 50nm/px -> expected 50nm fiber is 1px
+    status, msg = check_resolution_resolvability(roi, cal_low, expected_width_m=50e-9)
+    assert status == "RESOLUTION_INSUFFICIENT"
+    assert "Resolución insuficiente" in msg
+
+    roi_high = np.full((100, 100), 50, dtype=np.float32)
+    roi_high[30:70, 40:60] = 200.0
+    cal_high = Calibration(1e-9, 1e-9, "high_mag")  # 1nm/px -> expected 50nm fiber is 50px
+    status_high, _msg_high = check_resolution_resolvability(roi_high, cal_high, expected_width_m=50e-9)
+    assert status_high == "RESOLUTION_OK"
+
+
+def test_preset_selection_logic():
+    p1 = get_preset_for_calibration(Calibration(2e-9, 2e-9, "t"))
+    assert p1.name == "HIGH_MAG_FINE"
+
+    p2 = get_preset_for_calibration(Calibration(15e-9, 15e-9, "t"))
+    assert p2.name == "MID_MAG_GENERAL"
+
+    p3 = get_preset_for_calibration(Calibration(50e-9, 50e-9, "t"))
+    assert p3.name == "LOW_MAG_NETWORK"
+
+
+def test_preset_json_round_trip():
+    p = PRESET_HIGH_MAG_FINE
+    d = p.to_dict()
+    restored = ResolutionPreset.from_dict(d)
+    assert restored.name == p.name
+    assert restored.min_area_px == p.min_area_px
+
+
 def test_straight_bright_fiber_on_dark_bg():
     gray = np.full((150, 150), 20.0, dtype=np.float32)
-    # Vertical bright bar of width 20px
     gray[20:130, 65:85] = 220.0
     cal = Calibration(1e-9, 1e-9, "test")
 
@@ -37,7 +132,6 @@ def test_straight_bright_fiber_on_dark_bg():
 
 def test_dark_fiber_on_bright_bg():
     gray = np.full((150, 150), 230.0, dtype=np.float32)
-    # Dark fiber
     gray[20:130, 65:85] = 30.0
     cal = Calibration(1e-9, 1e-9, "test")
 
@@ -57,9 +151,7 @@ def test_dark_fiber_on_bright_bg():
 
 def test_two_parallel_separated_fibers():
     gray = np.full((160, 160), 20.0, dtype=np.float32)
-    # Fiber 1
     gray[20:140, 35:48] = 210.0
-    # Fiber 2
     gray[20:140, 110:123] = 210.0
     cal = Calibration(1e-9, 1e-9, "test")
 
@@ -71,13 +163,11 @@ def test_two_parallel_separated_fibers():
         min_area_px=30,
         min_elongation=2.0,
     )
-    # Should detect 2 distinct candidates
     assert len(candidates) == 2
 
 
 def test_circular_object_fails_low_elongation():
     gray = np.full((120, 120), 20.0, dtype=np.float32)
-    # Circular disk of radius 25
     y, x = np.ogrid[:120, :120]
     mask = (x - 60) ** 2 + (y - 60) ** 2 <= 25 ** 2
     gray[mask] = 220.0
@@ -96,7 +186,6 @@ def test_circular_object_fails_low_elongation():
 
 def test_component_touches_roi_edge():
     gray = np.full((120, 120), 20.0, dtype=np.float32)
-    # Fiber touching top edge of ROI (y=0)
     gray[0:80, 55:70] = 220.0
     cal = Calibration(1e-9, 1e-9, "test")
 
@@ -128,7 +217,6 @@ def test_too_small_component():
 def test_anisotropic_pixels_physical_pca():
     gray = np.full((150, 150), 20.0, dtype=np.float32)
     gray[20:130, 60:80] = 220.0
-    # Anisotropic pixels: x is 2nm, y is 1nm
     cal = Calibration(2e-9, 1e-9, "test")
 
     candidates, _summary = analyze_roi(
@@ -140,7 +228,6 @@ def test_anisotropic_pixels_physical_pca():
     assert len(candidates) >= 1
     cand = candidates[0]
     assert cand.median_width_m is not None
-    # Physical width should be ~ 20px * 2nm = 40nm
     assert 30e-9 <= cand.median_width_m <= 50e-9
 
 
@@ -160,7 +247,6 @@ def test_candidate_acceptance_to_project(tmp_path):
     assert len(candidates) >= 1
     cand = candidates[0]
 
-    # Convert candidate to project measurements
     fiber_id = proj.get_next_fiber_id()
     for pm in cand.proposed_measurements:
         m = Measurement(
@@ -195,7 +281,6 @@ def test_rejected_candidate_does_not_affect_statistics(tmp_path):
         status="REJECTED",
     )
 
-    # REJECTED candidate is not added to proj.measurements
     assert len(proj.measurements) == 0
 
 
