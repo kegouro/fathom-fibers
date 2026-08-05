@@ -21,6 +21,7 @@ from .analysis import (
     snap_two_click_edges,
     validate_measurement_geometry,
 )
+from .auto_roi import AutoFiberCandidate, AutoROISummary, analyze_roi
 from .exporters import export_annotated, export_csv, export_html_report
 from .model import Measurement, Project
 from .project_io import (
@@ -35,11 +36,12 @@ from .zeiss import file_sha256, load_image_document, load_pixels
 class FiberQuickApp(tk.Tk):
     GROUP_HEX: ClassVar[list[str]] = ["#0072B2", "#E69F00", "#009E73", "#CC79A7"]
     SELECTED = "#FFBF00"
+    CANDIDATE_COLOR = "#00E5FF"
 
     def __init__(self, initial_path: str | None = None) -> None:
         super().__init__()
         self.title("Fathom Fibers Quick 0.1 — Manual-first SEM measurement")
-        self.geometry("1550x920")
+        self.geometry("1580x940")
         self.minsize(1100, 700)
 
         self.project: Project | None = None
@@ -60,6 +62,13 @@ class FiberQuickApp(tk.Tk):
         self.pending_point: tuple[float, float] | None = None
         self.histogram_filter: tuple[str, int, list[str]] | None = None  # (mode, bin_idx, item_ids)
 
+        # Auto ROI state
+        self.roi_bbox: tuple[int, int, int, int] | None = None  # (x0, y0, x1, y1) in image px
+        self.pending_roi_start: tuple[float, float] | None = None
+        self.auto_candidates: list[AutoFiberCandidate] = []
+        self.auto_summary: AutoROISummary | None = None
+        self.selected_candidate_id: str | None = None
+
         self.pan_anchor: tuple[float, float] | None = None
         self.pan_offset_anchor: tuple[float, float] | None = None
 
@@ -75,6 +84,15 @@ class FiberQuickApp(tk.Tk):
         self.status_var = tk.StringVar(value="Abre un TIFF Zeiss para comenzar.")
         self.calibration_var = tk.StringVar(value="Sin imagen")
         self.protocol_status_var = tk.StringVar(value="Protocolo: 0 / 5 (Incompleto)")
+
+        # Auto ROI variables
+        self.show_auto_candidates_var = tk.BooleanVar(value=True)
+        self.roi_polarity_var = tk.StringVar(value="Automática")
+        self.roi_min_area_var = tk.IntVar(value=40)
+        self.roi_min_elong_var = tk.DoubleVar(value=2.2)
+        self.roi_min_width_var = tk.DoubleVar(value=2.0)
+        self.roi_n_sections_var = tk.IntVar(value=3)
+        self.roi_summary_var = tk.StringVar(value="ROI: Sin analizar")
 
         # Histogram variables
         self.hist_mode_var = tk.StringVar(value="fiber")
@@ -161,7 +179,7 @@ class FiberQuickApp(tk.Tk):
 
     def _build_left_panel(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="FATHOM FIBERS", font=("TkDefaultFont", 14, "bold")).pack(anchor=tk.W)
-        ttk.Label(parent, text="MVP manual y asistido", foreground="#666").pack(anchor=tk.W, pady=(0, 4))
+        ttk.Label(parent, text="MVP manual y asistido + ROI Auto", foreground="#666").pack(anchor=tk.W, pady=(0, 4))
 
         # Protocol Panel
         proto_box = ttk.LabelFrame(parent, text="PROTOCOLO DE MEDICIÓN", padding=6)
@@ -205,6 +223,7 @@ class FiberQuickApp(tk.Tk):
         tools.pack(fill=tk.X, pady=4)
         choices = [
             ("Seleccionar / editar (V)", "select"),
+            ("ROI automática (I)", "auto_roi"),
             ("Manual 2 clics (M)", "manual"),
             ("Ajustar bordes 2 clics (S)", "snap"),
             ("Propuesta local 1 clic (A)", "auto"),
@@ -216,10 +235,36 @@ class FiberQuickApp(tk.Tk):
         ttk.Label(radius_row, text="Radio auto (px):").pack(side=tk.LEFT)
         ttk.Spinbox(radius_row, from_=10, to=300, increment=5, textvariable=self.search_radius_var, width=7).pack(side=tk.RIGHT)
 
+        # Auto ROI Control Panel
+        roi_box = ttk.LabelFrame(parent, text="Análisis Automático ROI", padding=6)
+        roi_box.pack(fill=tk.X, pady=4)
+
+        pol_row = ttk.Frame(roi_box)
+        pol_row.pack(fill=tk.X, pady=2)
+        ttk.Label(pol_row, text="Polaridad:").pack(side=tk.LEFT)
+        ttk.Combobox(
+            pol_row,
+            textvariable=self.roi_polarity_var,
+            values=("Automática", "Clara", "Oscura"),
+            state="readonly",
+            width=10,
+        ).pack(side=tk.RIGHT)
+
+        sec_row = ttk.Frame(roi_box)
+        sec_row.pack(fill=tk.X, pady=2)
+        ttk.Label(sec_row, text="Secciones:").pack(side=tk.LEFT)
+        ttk.Spinbox(sec_row, from_=3, to=5, increment=2, textvariable=self.roi_n_sections_var, width=5).pack(side=tk.RIGHT)
+
+        roi_btns = ttk.Frame(roi_box)
+        roi_btns.pack(fill=tk.X, pady=(4, 2))
+        ttk.Button(roi_btns, text="Analizar ROI", command=self.run_auto_roi).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+        ttk.Button(roi_btns, text="Limpiar ROI", command=self.clear_roi).pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=1)
+
         # Display & View Panel
         display = ttk.LabelFrame(parent, text="Vista y Canvas", padding=6)
         display.pack(fill=tk.X, pady=4)
         ttk.Checkbutton(display, text="Mostrar todas las fibras", variable=self.show_all_sections_var, command=self.render).pack(anchor=tk.W)
+        ttk.Checkbutton(display, text="Mostrar candidatos ROI", variable=self.show_auto_candidates_var, command=self.render).pack(anchor=tk.W)
         ttk.Checkbutton(display, text="Mostrar zona del footer", variable=self.footer_visible_var, command=self.render).pack(anchor=tk.W)
 
         btn_row = ttk.Frame(display)
@@ -245,17 +290,18 @@ class FiberQuickApp(tk.Tk):
         ttk.Button(rev_btns, text="Aceptar / Rechazar (R)", command=self.toggle_selected_acceptance).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
         ttk.Button(rev_btns, text="Eliminar (Del)", command=self.delete_selected).pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=1)
 
-        # Classification Panel
+        # Classification Panel (Updated per Section 15)
         classify = ttk.LabelFrame(parent, text="Familias de Tamaño", padding=6)
         classify.pack(fill=tk.X, pady=4)
+        ttk.Label(classify, text="Agrupamiento automático experimental", font=("TkDefaultFont", 8, "italic"), foreground="#666").pack(anchor=tk.W)
         ttk.Combobox(
             classify,
             textvariable=self.classification_var,
             state="readonly",
             values=("Auto", "1", "2", "3", "4"),
             width=8,
-        ).pack(fill=tk.X)
-        ttk.Button(classify, text="Clasificar fibras", command=self.classify).pack(fill=tk.X, pady=(4, 0))
+        ).pack(fill=tk.X, pady=2)
+        ttk.Button(classify, text="Clasificar fibras", command=self.classify).pack(fill=tk.X, pady=(2, 0))
 
     def _build_canvas(self, parent: ttk.Frame) -> None:
         self.canvas = tk.Canvas(parent, background="#161616", highlightthickness=0, cursor="crosshair")
@@ -278,12 +324,14 @@ class FiberQuickApp(tk.Tk):
 
         fibers_tab = ttk.Frame(self.notebook, padding=4)
         measurements_tab = ttk.Frame(self.notebook, padding=4)
+        auto_tab = ttk.Frame(self.notebook, padding=4)
         histogram_tab = ttk.Frame(self.notebook, padding=4)
         inspector_tab = ttk.Frame(self.notebook, padding=6)
         metadata_tab = ttk.Frame(self.notebook, padding=6)
 
         self.notebook.add(fibers_tab, text="Fibras")
         self.notebook.add(measurements_tab, text="Mediciones")
+        self.notebook.add(auto_tab, text="Revisión ROI")
         self.notebook.add(histogram_tab, text="Histograma")
         self.notebook.add(inspector_tab, text="Inspector")
         self.notebook.add(metadata_tab, text="Metadata")
@@ -317,16 +365,49 @@ class FiberQuickApp(tk.Tk):
         self.tree.bind("<<TreeviewSelect>>", self._tree_selection)
         self.tree.bind("<Double-1>", self._on_tree_double_click)
 
-        # Tab 3: Interactive Histogram
+        # Tab 3: Auto-ROI Review Queue
+        self._build_auto_review_tab(auto_tab)
+
+        # Tab 4: Interactive Histogram
         self._build_histogram_tab(histogram_tab)
 
-        # Tab 4: Inspector
+        # Tab 5: Inspector
         self.inspector_text = tk.Text(inspector_tab, width=44, height=40, wrap=tk.WORD, state=tk.DISABLED)
         self.inspector_text.pack(fill=tk.BOTH, expand=True)
 
-        # Tab 5: Metadata
+        # Tab 6: Metadata
         self.metadata_text = tk.Text(metadata_tab, width=44, height=40, wrap=tk.NONE, state=tk.DISABLED)
         self.metadata_text.pack(fill=tk.BOTH, expand=True)
+
+    def _build_auto_review_tab(self, parent: ttk.Frame) -> None:
+        summary_lbl = ttk.Label(parent, textvariable=self.roi_summary_var, font=("TkDefaultFont", 9, "bold"), padding=4)
+        summary_lbl.pack(anchor=tk.W)
+
+        auto_cols = ("id", "status", "sections", "median", "confidence", "flags")
+        self.auto_tree = ttk.Treeview(parent, columns=auto_cols, show="headings", height=20)
+        auto_headers = {"id": "ID Candidate", "status": "Estado", "sections": "Secciones", "median": "Mediana", "confidence": "Confianza", "flags": "Quality Flags"}
+        auto_widths = {"id": 85, "status": 80, "sections": 65, "median": 85, "confidence": 95, "flags": 150}
+        for col in auto_cols:
+            self.auto_tree.heading(col, text=auto_headers[col])
+            self.auto_tree.column(col, width=auto_widths[col], anchor=tk.CENTER, stretch=(col == "flags"))
+        a_scroll = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.auto_tree.yview)
+        self.auto_tree.configure(yscrollcommand=a_scroll.set)
+        self.auto_tree.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        a_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.auto_tree.bind("<<TreeviewSelect>>", self._on_auto_tree_select)
+
+        ctrl_frame = ttk.Frame(parent, padding=4)
+        ctrl_frame.pack(fill=tk.X, side=tk.BOTTOM)
+
+        row1 = ttk.Frame(ctrl_frame)
+        row1.pack(fill=tk.X, pady=2)
+        ttk.Button(row1, text="✓ Aceptar candidato", command=self.accept_candidate).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        ttk.Button(row1, text="✗ Rechazar candidato", command=self.reject_candidate).pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=2)
+
+        row2 = ttk.Frame(ctrl_frame)
+        row2.pack(fill=tk.X, pady=2)
+        ttk.Button(row2, text="Aceptar candidatos de Alta Confianza", command=self.accept_high_confidence_candidates).pack(fill=tk.X, pady=2)
+        ttk.Button(row2, text="Rechazar restantes", command=self.reject_remaining_candidates).pack(fill=tk.X, pady=2)
 
     def _build_histogram_tab(self, parent: ttk.Frame) -> None:
         ctrls = ttk.Frame(parent, padding=4)
@@ -357,6 +438,7 @@ class FiberQuickApp(tk.Tk):
         self.bind_all("<Control-s>", lambda _event: self.save_project_dialog())
         self.bind_all("<Control-e>", lambda _event: self.export_annotated_dialog())
         self.bind_all("<Key-v>", lambda event: self._shortcut_guard(event, lambda: self.tool_var.set("select")))
+        self.bind_all("<Key-i>", lambda event: self._shortcut_guard(event, lambda: self.tool_var.set("auto_roi")))
         self.bind_all("<Key-m>", lambda event: self._shortcut_guard(event, lambda: self.tool_var.set("manual")))
         self.bind_all("<Key-s>", lambda event: self._shortcut_guard(event, lambda: self.tool_var.set("snap")))
         self.bind_all("<Key-a>", lambda event: self._shortcut_guard(event, lambda: self.tool_var.set("auto")))
@@ -426,6 +508,9 @@ class FiberQuickApp(tk.Tk):
             self.selected_measurement_id = None
             self.active_fiber_id = "F001"
             self.pending_point = None
+            self.roi_bbox = None
+            self.auto_candidates = []
+            self.auto_summary = None
             self.histogram_filter = None
             self._has_fit = False
             self._clear_dirty()
@@ -436,7 +521,7 @@ class FiberQuickApp(tk.Tk):
             )
             self._refresh_all()
             self.after_idle(self.fit_image)
-            self.status_var.set("Imagen cargada. Mide perpendicularmente al eje de la fibra.")
+            self.status_var.set("Imagen cargada. Mide libremente o dibuja una ROI para análisis automático.")
         except Exception as exc:
             messagebox.showerror("No se pudo abrir", str(exc), parent=self)
 
@@ -512,6 +597,9 @@ class FiberQuickApp(tk.Tk):
             self.gray = gray
             self.selected_measurement_id = None
             self.active_fiber_id = project.active_fiber_id or "F001"
+            self.roi_bbox = None
+            self.auto_candidates = []
+            self.auto_summary = None
             self.histogram_filter = None
             self._has_fit = False
 
@@ -577,6 +665,8 @@ class FiberQuickApp(tk.Tk):
                 show_extrema=True,
                 show_defects=True,
                 show_legend=True,
+                show_candidates=self.show_auto_candidates_var.get(),
+                candidates=self.auto_candidates,
             )
             self.status_var.set(f"Imagen anotada exportada: {path}")
 
@@ -695,7 +785,70 @@ class FiberQuickApp(tk.Tk):
             self.canvas.create_rectangle(x0c, y0c, x1c, y1c, outline="#ff6b6b", width=2, fill="#555555", stipple="gray50")
             self.canvas.create_text(x0c + 8, y0c + 8, text="FOOTER EXCLUIDO", anchor=tk.NW, fill="#ffdfdf", font=("TkDefaultFont", 10, "bold"))
 
+        self._draw_roi_box()
+        self._draw_auto_candidates()
         self._draw_measurements()
+
+    def _draw_roi_box(self) -> None:
+        if self.roi_bbox is None or self.project is None:
+            return
+        x0, y0, x1, y1 = self.roi_bbox
+        p0c = self.image_to_canvas((x0, y0))
+        p1c = self.image_to_canvas((x1, y1))
+
+        self.canvas.create_rectangle(*p0c, *p1c, outline="#00D7FF", width=2, dash=(6, 4))
+
+        # ROI label
+        w_px = x1 - x0
+        h_px = y1 - y0
+        w_m = w_px * self.project.image.calibration.pixel_size_x_m
+        h_m = h_px * self.project.image.calibration.pixel_size_y_m
+        roi_txt = f"ROI: {w_px}x{h_px} px | {format_length_m(w_m)} x {format_length_m(h_m)}"
+
+        self.canvas.create_rectangle(p0c[0], p0c[1] - 20, p0c[0] + 280, p0c[1], fill="#003542", outline="#00D7FF")
+        self.canvas.create_text(p0c[0] + 6, p0c[1] - 10, text=roi_txt, fill="#00D7FF", font=("TkDefaultFont", 8, "bold"), anchor=tk.W)
+
+    def _draw_auto_candidates(self) -> None:
+        if not self.show_auto_candidates_var.get() or not self.auto_candidates:
+            return
+
+        for cand in self.auto_candidates:
+            is_selected = cand.candidate_id == self.selected_candidate_id
+            if cand.status == "REJECTED":
+                color = "#555555"
+                width = 1
+                dash = (2, 4)
+            elif cand.status == "ACCEPTED":
+                color = "#00FF7F"
+                width = 2
+                dash = None
+            elif is_selected:
+                color = self.SELECTED
+                width = 4
+                dash = None
+            else:
+                color = self.CANDIDATE_COLOR
+                width = 2
+                dash = (4, 3)
+
+            for pm in cand.proposed_measurements:
+                p1c = self.image_to_canvas(pm.p1)
+                p2c = self.image_to_canvas(pm.p2)
+                self.canvas.create_line(*p1c, *p2c, fill=color, width=width, dash=dash)
+                for pt in (p1c, p2c):
+                    self.canvas.create_oval(pt[0] - 3, pt[1] - 3, pt[0] + 3, pt[1] + 3, fill=color, outline="white")
+
+            if cand.proposed_measurements:
+                c_center = self.image_to_canvas(cand.proposed_measurements[0].center)
+                label_txt = f"{cand.candidate_id} ({cand.confidence_level})"
+                self.canvas.create_text(
+                    c_center[0] + 6,
+                    c_center[1] - 6,
+                    text=label_txt,
+                    fill=color,
+                    font=("TkDefaultFont", 8, "bold" if is_selected else "normal"),
+                    anchor=tk.SW,
+                )
 
     def _draw_measurements(self) -> None:
         if self.project is None:
@@ -704,7 +857,6 @@ class FiberQuickApp(tk.Tk):
         extrema_by_m = get_fiber_extrema(self.project.measurements, self.active_fiber_id)
         show_all = self.show_all_sections_var.get()
 
-        # Histogram filter items set
         filter_items = set(self.histogram_filter[2]) if self.histogram_filter else None
         filter_mode = self.histogram_filter[0] if self.histogram_filter else None
 
@@ -715,7 +867,6 @@ class FiberQuickApp(tk.Tk):
             if not show_all and not is_active_fiber:
                 continue
 
-            # Filtering dimming check
             if filter_items is not None:
                 if filter_mode == "fiber" and measurement.fiber_id not in filter_items:
                     continue
@@ -756,9 +907,8 @@ class FiberQuickApp(tk.Tk):
 
             center = self.image_to_canvas(measurement.center)
 
-            # Labels for selected measurement or active fiber
             if is_selected or (is_active_fiber and self.scale > 0.4):
-                method_icon = " [A]" if "ASSISTED" in measurement.method else ""
+                method_icon = " [A]" if "ASSISTED" in measurement.method or "AUTO" in measurement.method else ""
                 label_txt = f"{measurement.fiber_id}: {measurement.width_m * 1e6:.3f} µm{method_icon}"
                 self.canvas.create_text(
                     center[0] + 8,
@@ -769,7 +919,6 @@ class FiberQuickApp(tk.Tk):
                     font=("TkDefaultFont", 9, "bold" if is_selected else "normal"),
                 )
 
-            # MIN, MED, MAX Extrema badges for active fiber
             if is_active_fiber and measurement.measurement_id in extrema_by_m:
                 labels = "/".join(extrema_by_m[measurement.measurement_id])
                 self.canvas.create_rectangle(
@@ -838,6 +987,11 @@ class FiberQuickApp(tk.Tk):
                 self.select_measurement(None)
             return
 
+        if tool == "auto_roi":
+            self.pending_roi_start = point
+            self.status_var.set("Arrastra para definir el rectángulo de la ROI...")
+            return
+
         if self._inside_footer(point):
             self.status_var.set("La zona del footer está excluida. Elige una región de micrografía.")
             self.bell()
@@ -858,6 +1012,16 @@ class FiberQuickApp(tk.Tk):
                 self.render()
 
     def _on_left_motion(self, event: tk.Event[Any]) -> None:
+        if self.tool_var.get() == "auto_roi" and self.pending_roi_start is not None:
+            p_curr = self.canvas_to_image((event.x, event.y))
+            x0 = int(min(self.pending_roi_start[0], p_curr[0]))
+            y0 = int(min(self.pending_roi_start[1], p_curr[1]))
+            x1 = int(max(self.pending_roi_start[0], p_curr[0]))
+            y1 = int(max(self.pending_roi_start[1], p_curr[1]))
+            self.roi_bbox = (x0, y0, x1, y1)
+            self.render()
+            return
+
         if self.drag_endpoint is None or self.dragging_measurement_id is None or self.project is None:
             return
         measurement = self._measurement_by_id(self.dragging_measurement_id)
@@ -878,6 +1042,14 @@ class FiberQuickApp(tk.Tk):
         self.render()
 
     def _on_left_release(self, _event: tk.Event[Any]) -> None:
+        if self.tool_var.get() == "auto_roi" and self.pending_roi_start is not None:
+            self.pending_roi_start = None
+            if self.roi_bbox:
+                w = self.roi_bbox[2] - self.roi_bbox[0]
+                h = self.roi_bbox[3] - self.roi_bbox[1]
+                self.status_var.set(f"ROI definida ({w}x{h} px). Haz clic en 'Analizar ROI'.")
+            return
+
         if self.dragging_measurement_id:
             self.drag_endpoint = None
             self.dragging_measurement_id = None
@@ -890,6 +1062,65 @@ class FiberQuickApp(tk.Tk):
         self.render()
         start = self.image_to_canvas(self.pending_point)
         self.canvas.create_line(start[0], start[1], event.x, event.y, fill="#FFBF00", width=2, dash=(6, 3))
+
+    def run_auto_roi(self) -> None:
+        if self.project is None or self.gray is None:
+            messagebox.showwarning("Sin imagen", "Abre una micrografía antes de analizar una ROI.", parent=self)
+            return
+
+        if self.roi_bbox is None:
+            messagebox.showwarning("Sin ROI definida", "Usa la herramienta 'ROI automática (I)' para definir un rectángulo sobre la imagen.", parent=self)
+            return
+
+        pol_map = {"Automática": "auto", "Clara": "bright", "Oscura": "dark"}
+        polarity = pol_map.get(self.roi_polarity_var.get(), "auto")
+        n_sec = self.roi_n_sections_var.get()
+
+        self.status_var.set("Analizando ROI...")
+        self.update_idletasks()
+
+        try:
+            candidates, summary = analyze_roi(
+                gray=self.gray,
+                roi_bbox=self.roi_bbox,
+                calibration=self.project.image.calibration,
+                footer_bounds=self.project.image.footer_bounds,
+                polarity=polarity,
+                min_area_px=self.roi_min_area_var.get(),
+                min_elongation=self.roi_min_elong_var.get(),
+                min_width_px=self.roi_min_width_var.get(),
+                n_sections=n_sec,
+            )
+
+            self.auto_candidates = candidates
+            self.auto_summary = summary
+            self.selected_candidate_id = candidates[0].candidate_id if candidates else None
+
+            self.roi_summary_var.set(
+                f"Componentes: {summary.total_components} | Medibles: {summary.measurable_candidates} | "
+                f"Alta confianza: {summary.high_confidence} | Revisión: {summary.needs_review} | Excluidos: {summary.excluded}"
+            )
+
+            self._refresh_auto_tree()
+            self.notebook.select(2)  # Switch to ROI review tab
+            self.render()
+
+            self.status_var.set(
+                f"Análisis completado: {summary.measurable_candidates} candidatos en ROI ({summary.high_confidence} de Alta confianza)."
+            )
+        except Exception as exc:
+            messagebox.showerror("Error al analizar ROI", str(exc), parent=self)
+
+    def clear_roi(self) -> None:
+        self.roi_bbox = None
+        self.pending_roi_start = None
+        self.auto_candidates = []
+        self.auto_summary = None
+        self.selected_candidate_id = None
+        self.roi_summary_var.set("ROI: Sin analizar")
+        self._refresh_auto_tree()
+        self.render()
+        self.status_var.set("ROI y candidatos automáticos limpiados.")
 
     def _create_two_click(self, p1: tuple[float, float], p2: tuple[float, float], snap: bool) -> None:
         assert self.project is not None and self.gray is not None
@@ -950,7 +1181,6 @@ class FiberQuickApp(tk.Tk):
         self.select_measurement(measurement.measurement_id)
         self._mark_dirty()
 
-        # Check protocol auto-advance
         if self.project.is_fiber_complete(self.active_fiber_id) and self.auto_advance_var.get():
             self.status_var.set(f"¡Protocolo de {self.active_fiber_id} completado! Avanzando automáticamente.")
             self.next_fiber()
@@ -972,7 +1202,6 @@ class FiberQuickApp(tk.Tk):
             d1 = float(np.linalg.norm(point - p1))
             d2 = float(np.linalg.norm(point - p2))
 
-            # Bonus priority for active fiber
             priority_penalty = 0.0 if measurement.fiber_id == self.active_fiber_id else 5.0
 
             for distance, endpoint in ((d1, 0), (d2, 1)):
@@ -1001,7 +1230,6 @@ class FiberQuickApp(tk.Tk):
         self.lbl_active_fiber.configure(text=fiber_id)
         self._update_protocol_display()
 
-        # Select in fiber tree
         if self.fiber_tree.exists(fiber_id):
             self.fiber_tree.selection_set(fiber_id)
             self.fiber_tree.see(fiber_id)
@@ -1034,6 +1262,12 @@ class FiberQuickApp(tk.Tk):
         selected = self.fiber_tree.selection()
         if selected:
             self.select_fiber(selected[0])
+
+    def _on_auto_tree_select(self, _event: tk.Event[Any]) -> None:
+        selected = self.auto_tree.selection()
+        if selected:
+            self.selected_candidate_id = selected[0]
+            self.render()
 
     def new_fiber(self) -> None:
         if self.project is None:
@@ -1126,6 +1360,93 @@ class FiberQuickApp(tk.Tk):
         self._refresh_all()
         self.status_var.set(f"Clasificación aplicada: {groups} grupo(s) compatibles con la distribución.")
 
+    # ---------- Candidate Review Actions ----------
+
+    def accept_candidate(self) -> None:
+        if self.project is None or self.selected_candidate_id is None:
+            return
+        cand = next((c for c in self.auto_candidates if c.candidate_id == self.selected_candidate_id), None)
+        if cand is None or cand.status == "ACCEPTED":
+            return
+
+        fiber_id = self.project.get_next_fiber_id()
+        for pm in cand.proposed_measurements:
+            m = Measurement(
+                measurement_id=self.project.next_measurement_id(),
+                fiber_id=fiber_id,
+                p1=pm.p1,
+                p2=pm.p2,
+                width_m=pm.width_m,
+                method="AUTO_ROI_COMPONENT",
+                confidence=cand.confidence_score,
+            )
+            self.project.measurements.append(m)
+
+        cand.status = "ACCEPTED"
+        self.select_fiber(fiber_id)
+        self._mark_dirty()
+        self._refresh_all()
+        self._refresh_auto_tree()
+        self.status_var.set(f"Candidato {cand.candidate_id} aceptado como nueva fibra {fiber_id} ({len(cand.proposed_measurements)} secciones).")
+
+    def reject_candidate(self) -> None:
+        if self.selected_candidate_id is None:
+            return
+        cand = next((c for c in self.auto_candidates if c.candidate_id == self.selected_candidate_id), None)
+        if cand:
+            cand.status = "REJECTED"
+            self._refresh_auto_tree()
+            self.render()
+            self.status_var.set(f"Candidato {cand.candidate_id} rechazado.")
+
+    def accept_high_confidence_candidates(self) -> None:
+        if self.project is None or not self.auto_candidates:
+            return
+        high_conf = [c for c in self.auto_candidates if c.status == "PENDING" and c.confidence_level == "Alta"]
+        if not high_conf:
+            messagebox.showinfo("Sin candidatos", "No hay candidatos pendientes de Alta Confianza.", parent=self)
+            return
+
+        n_sec = sum(len(c.proposed_measurements) for c in high_conf)
+        confirm = messagebox.askyesno(
+            "Confirmación de aceptación masiva",
+            f"¿Deseas aceptar {len(high_conf)} candidatos de Alta Confianza con un total de {n_sec} secciones?\n\n"
+            "Solo se incorporarán candidatos sin flags críticos ni contacto con bordes.",
+            parent=self,
+        )
+        if not confirm:
+            return
+
+        for cand in high_conf:
+            fiber_id = self.project.get_next_fiber_id()
+            for pm in cand.proposed_measurements:
+                m = Measurement(
+                    measurement_id=self.project.next_measurement_id(),
+                    fiber_id=fiber_id,
+                    p1=pm.p1,
+                    p2=pm.p2,
+                    width_m=pm.width_m,
+                    method="AUTO_ROI_COMPONENT",
+                    confidence=cand.confidence_score,
+                )
+                self.project.measurements.append(m)
+            cand.status = "ACCEPTED"
+
+        self._mark_dirty()
+        self._refresh_all()
+        self._refresh_auto_tree()
+        self.status_var.set(f"Aceptados masivamente {len(high_conf)} candidatos de alta confianza.")
+
+    def reject_remaining_candidates(self) -> None:
+        if not self.auto_candidates:
+            return
+        pending = [c for c in self.auto_candidates if c.status == "PENDING"]
+        for c in pending:
+            c.status = "REJECTED"
+        self._refresh_auto_tree()
+        self.render()
+        self.status_var.set(f"Rechazados {len(pending)} candidatos pendientes.")
+
     # ---------- Interactive Histogram ----------
 
     def _refresh_histogram(self) -> None:
@@ -1163,7 +1484,6 @@ class FiberQuickApp(tk.Tk):
         n = len(counts)
         bar_w = plot_w / max(1, n)
 
-        # Store bin boxes for click hit-testing
         self._hist_bin_boxes = []
 
         for i in range(n):
@@ -1187,7 +1507,6 @@ class FiberQuickApp(tk.Tk):
 
             self._hist_bin_boxes.append((x0, y0, x1, y1, i, edges[i], edges[i + 1]))
 
-        # Mean and Median lines
         mean_val = hist_data["mean_m"]
         med_val = hist_data["median_m"]
         min_e, max_e = edges[0], edges[-1]
@@ -1206,14 +1525,13 @@ class FiberQuickApp(tk.Tk):
     def _on_histogram_click(self, event: tk.Event[Any]) -> None:
         if not hasattr(self, "_hist_bin_boxes") or not self.project:
             return
-        cx, _cy = event.x, event.y
+        cx = event.x
         mode = self.hist_mode_var.get()
         n_bins = self.hist_bins_var.get()
         hist_data = compute_histogram_data(self.project.measurements, mode=mode, n_bins=n_bins)
 
-        for x0, y0, x1, y1, bin_idx, e0, e1 in self._hist_bin_boxes:
+        for x0, _y0, x1, _y1, bin_idx, e0, e1 in self._hist_bin_boxes:
             if x0 <= cx <= x1:
-                # Find matching items in bin range
                 matching_ids = []
                 for item_id, val in hist_data["items"]:
                     if e0 <= val <= e1:
@@ -1238,10 +1556,34 @@ class FiberQuickApp(tk.Tk):
         self._update_protocol_display()
         self._refresh_fiber_tree()
         self._refresh_tree()
+        self._refresh_auto_tree()
         self._refresh_inspector()
         self._refresh_histogram()
         self._refresh_metadata()
         self.render()
+
+    def _refresh_auto_tree(self) -> None:
+        for item in self.auto_tree.get_children():
+            self.auto_tree.delete(item)
+        for cand in self.auto_candidates:
+            med_str = format_length_m(cand.median_width_m) if cand.median_width_m else "—"
+            flags_str = ", ".join(sorted(cand.quality_flags)) if cand.quality_flags else "ninguno"
+            conf_str = f"{cand.confidence_score:.2f} ({cand.confidence_level})"
+            self.auto_tree.insert(
+                "",
+                tk.END,
+                iid=cand.candidate_id,
+                values=(
+                    cand.candidate_id,
+                    cand.status,
+                    len(cand.proposed_measurements),
+                    med_str,
+                    conf_str,
+                    flags_str,
+                ),
+            )
+        if self.selected_candidate_id and self.auto_tree.exists(self.selected_candidate_id):
+            self.auto_tree.selection_set(self.selected_candidate_id)
 
     def _refresh_fiber_tree(self) -> None:
         for item in self.fiber_tree.get_children():
@@ -1306,7 +1648,7 @@ class FiberQuickApp(tk.Tk):
                     measurement.measurement_id,
                     measurement.fiber_id,
                     f"{measurement.width_m * 1e6:.3f} µm",
-                    measurement.method.replace("ASSISTED_", "A:").replace("MANUAL_", "M:"),
+                    measurement.method.replace("ASSISTED_", "A:").replace("MANUAL_", "M:").replace("AUTO_ROI_COMPONENT", "ROI:"),
                     group,
                     measurement.defect,
                     "✓" if measurement.accepted else "✗",
@@ -1379,6 +1721,7 @@ class FiberQuickApp(tk.Tk):
 
     def _clear_pending(self) -> None:
         self.pending_point = None
+        self.pending_roi_start = None
         self.drag_endpoint = None
         self.dragging_measurement_id = None
         self.render()
@@ -1397,10 +1740,11 @@ class FiberQuickApp(tk.Tk):
         messagebox.showinfo(
             "Protocolo de Medición de Fibras SEM",
             "1. Selecciona o crea una ID de fibra (ej. F001).\n"
-            "2. Realiza 3 o 5 secciones perpendiculares por fibra.\n"
+            "2. Realiza 3 o 5 secciones perpendiculares por fibra o usa 'ROI automática (I)'.\n"
             "3. Revisa el indicador de progreso del protocolo (ej. 5/5 Completo).\n"
-            "4. Utiliza la tabla de Fibras o el Inspector para revisar estadísticas inmediatas.\n"
+            "4. Utiliza la pestaña 'Revisión ROI' para validar y aceptar candidatos automáticos.\n"
             "5. Usa los atajos de teclado para un flujo ultra-rápido:\n"
+            "   • I: Herramienta ROI automática\n"
             "   • N: Nueva fibra\n"
             "   • PageUp / PageDown: Navegar entre fibras\n"
             "   • M: Medición manual | S: Snap | A: Propuesta auto\n"
@@ -1413,9 +1757,9 @@ class FiberQuickApp(tk.Tk):
         messagebox.showinfo(
             "Acerca de Fathom Fibers Quick",
             "Fathom Fibers Quick 0.1 — Endurecido\n\n"
-            "Herramienta interactiva de medición manual y asistida de ancho proyectado para micrografías SEM.\n"
+            "Herramienta interactiva de medición manual, asistida y automática en ROI para micrografías SEM.\n"
             "Optimizado para metadatos Zeiss CZ_SEM con verificación de integridad SHA-256.\n\n"
-            "Los puntajes asistidos son heurísticos locales. La interpretación científica requiere supuestos geométricos explícitos.",
+            "Los candidatos automáticos son propuestas heurísticas en ROI que requieren validación humana.",
             parent=self,
         )
 

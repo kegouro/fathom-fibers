@@ -4,6 +4,7 @@ import csv
 import html
 import json
 from pathlib import Path
+from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -68,6 +69,8 @@ def export_annotated(
     show_extrema: bool = False,
     show_defects: bool = True,
     show_legend: bool = True,
+    show_candidates: bool = False,
+    candidates: list[Any] | None = None,
 ) -> Path:
     path = Path(path)
     image = source_image.convert("RGB").copy()
