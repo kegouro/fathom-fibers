@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+import csv
+import html
+import json
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
+
+from .analysis import fiber_level_summary, fiber_statistics, format_length_m, section_level_summary
+from .model import Project
+
+GROUP_COLORS = [
+    (0, 114, 178),
+    (230, 159, 0),
+    (0, 158, 115),
+    (204, 121, 167),
+]
+
+
+def export_csv(project: Project, path: str | Path) -> Path:
+    path = Path(path)
+    rows = []
+    for m in project.measurements:
+        rows.append({
+            "measurement_id": m.measurement_id,
+            "fiber_id": m.fiber_id,
+            "method": m.method,
+            "accepted": m.accepted,
+            "width_m": m.width_m,
+            "width_um": m.width_m * 1e6,
+            "width_nm": m.width_m * 1e9,
+            "p1_x_px": m.p1[0],
+            "p1_y_px": m.p1[1],
+            "p2_x_px": m.p2[0],
+            "p2_y_px": m.p2[1],
+            "group": m.group,
+            "confidence": m.confidence,
+            "defect": m.defect,
+            "note": m.note,
+            "created_at": m.created_at,
+            "source_image": project.image.path,
+            "source_sha256": project.image.source_sha256,
+            "pixel_size_x_m": project.image.calibration.pixel_size_x_m,
+            "pixel_size_y_m": project.image.calibration.pixel_size_y_m,
+            "calibration_source": project.image.calibration.source,
+        })
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()) if rows else ["measurement_id"])
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+def export_annotated(project: Project, source_image: Image.Image, path: str | Path) -> Path:
+    path = Path(path)
+    image = source_image.convert("RGB").copy()
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=16)
+    for measurement in project.measurements:
+        color = GROUP_COLORS[(measurement.group or 0) % len(GROUP_COLORS)] if measurement.accepted else (130, 130, 130)
+        draw.line([measurement.p1, measurement.p2], fill=color, width=5)
+        radius = 6
+        for x, y in (measurement.p1, measurement.p2):
+            draw.ellipse((x-radius, y-radius, x+radius, y+radius), fill=color, outline=(255, 255, 255), width=2)
+        center = measurement.center
+        label = f"{measurement.fiber_id}: {measurement.width_m * 1e6:.3f} µm"
+        draw.text((center[0] + 8, center[1] + 8), label, fill=(255, 255, 0), font=font, stroke_width=2, stroke_fill=(0, 0, 0))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path)
+    return path
+
+
+def export_html_report(project: Project, annotated_name: str, path: str | Path) -> Path:
+    path = Path(path)
+    f_stats = fiber_level_summary(project.measurements)
+    s_stats = section_level_summary(project.measurements)
+    per_fiber = fiber_statistics(project.measurements)
+
+    def show(stats: dict[str, float | int | None], key: str) -> str:
+        value = stats[key]
+        return "—" if value is None else format_length_m(float(value))
+
+    rows = "\n".join(
+        f"<tr><td>{html.escape(fid)}</td><td>{values['n']}</td>"
+        f"<td>{values['mean_m'] * 1e6:.3f}</td><td>{values['median_m'] * 1e6:.3f}</td>"
+        f"<td>{values['min_m'] * 1e6:.3f}</td><td>{values['max_m'] * 1e6:.3f}</td></tr>"
+        for fid, values in sorted(per_fiber.items())
+    )
+    metadata = json.dumps(project.image.metadata, indent=2, ensure_ascii=False)
+    document = f"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><title>Fathom Fibers Report</title>
+<style>body{{font-family:system-ui;max-width:1200px;margin:2rem auto;padding:0 1rem}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #bbb;padding:.45rem;text-align:right}}th:first-child,td:first-child{{text-align:left}}img{{max-width:100%;border:1px solid #aaa}}code,pre{{background:#f4f4f4;padding:.5rem;overflow:auto}}</style></head>
+<body><h1>Fathom Fibers Quick — Informe de Ancho Proyectado</h1>
+<p><strong>Imagen:</strong> {html.escape(project.image.path)}</p>
+<p><strong>Calibración:</strong> {project.image.calibration.pixel_size_x_m * 1e9:.4f} nm/px ({html.escape(project.image.calibration.source)})</p>
+<h2>1. Resumen por Fibra (medianas por fibra)</h2><ul>
+<li>Fibras identificadas: {f_stats['n_fibers']}</li>
+<li>Mediciones válidas totales: {f_stats['n_measurements']}</li>
+<li>Media de medianas: {show(f_stats, 'mean_m')}</li>
+<li>Mediana global: {show(f_stats, 'median_m')}</li>
+<li>Mínimo crudo: {show(f_stats, 'min_m')}</li>
+<li>Máximo crudo: {show(f_stats, 'max_m')}</li>
+<li>P05–P95: {show(f_stats, 'p05_m')} – {show(f_stats, 'p95_m')}</li></ul>
+<h2>2. Distribución de Secciones Locales</h2><ul>
+<li>Secciones totales aceptadas: {s_stats['n_measurements']}</li>
+<li>Media por sección: {show(s_stats, 'mean_m')}</li>
+<li>Mediana por sección: {show(s_stats, 'median_m')}</li>
+<li>Mínimo crudo: {show(s_stats, 'min_m')}</li>
+<li>Máximo crudo: {show(s_stats, 'max_m')}</li>
+<li>P05–P95: {show(s_stats, 'p05_m')} – {show(s_stats, 'p95_m')}</li></ul>
+<h2>Imagen anotada</h2><img src="{html.escape(annotated_name)}" alt="Imagen anotada">
+<h2>Estadísticas por fibra individual (µm)</h2><table><thead><tr><th>Fibra</th><th>N</th><th>Media</th><th>Mediana</th><th>Mínimo crudo</th><th>Máximo crudo</th></tr></thead><tbody>{rows}</tbody></table>
+<h2>Metadata instrumental</h2><pre>{html.escape(metadata)}</pre>
+<p><small>Advertencia: la herramienta mide <strong>ancho proyectado</strong> en la micrografía 2D. Interpretarlo como diámetro verdadero asume fibras cilíndricas, aisladas y paralelas al plano de imagen. Cruces, inclinación, cintas y fusiones requieren revisión humana.</small></p>
+</body></html>"""
+    path.write_text(document, encoding="utf-8")
+    return path

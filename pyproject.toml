@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fathom-fibers-quick"
+version = "0.1.0"
+description = "Manual-first SEM fiber diameter measurement MVP with Zeiss CZ_SEM metadata support"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{name = "José Labarca Baeza"}]
+dependencies = [
+  "numpy>=1.26",
+  "Pillow>=10.0",
+  "tifffile>=2024.2",
+  "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+fathom-fibers = "fathom_fibers_quick.cli:main"
+fathom-fibers-gui = "fathom_fibers_quick.app:main"
+
+
+[project.entry-points."fathom_fibers.plugins.v1"]
+builtin = "fathom_fibers_quick.builtin_plugin:PLUGIN"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+ignore = ["BLE001"]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
