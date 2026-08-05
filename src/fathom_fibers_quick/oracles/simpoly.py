@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageDraw
 
 from ..model import Calibration
 from ..simpoly_compat import run_simpoly_pipeline
@@ -16,39 +15,51 @@ def generate_synthetic_fiber_phantom(
     width_px: float,
     shape: tuple[int, int] = (512, 512),
     disordered: bool = False,
-    n_fibers: int = 6,
+    n_fibers: int | None = None,
     seed: int = 42,
 ) -> np.ndarray:
     """Generates synthetic fiber network micrograph (ordered grid or disordered random fibers) with known width_px."""
     h, w = shape
-    img = Image.new("L", (w, h), color=20)
-    draw = ImageDraw.Draw(img)
+    if n_fibers is None:
+        n_fibers = 4 if width_px >= 60.0 else 6
+    arr = np.full((h, w), 20, dtype=np.uint8)
     rng = np.random.default_rng(seed)
 
+    half_w = width_px / 2.0
+    yy, xx = np.ogrid[:h, :w]
+
     if not disordered:
-        # Ordered grid network
+        # Ordered grid network with exact mathematical width
         spacing_y = h // (n_fibers // 2 + 1)
         spacing_x = w // (n_fibers // 2 + 1)
 
         for i in range(1, n_fibers // 2 + 1):
-            y = i * spacing_y
-            draw.line([(0, y), (w, y)], fill=200, width=round(width_px))
-            x = i * spacing_x
-            draw.line([(x, 0), (x, h)], fill=200, width=round(width_px))
+            cy = i * spacing_y
+            y_min = max(0, round(cy - half_w))
+            y_max = min(h, round(cy + half_w))
+            arr[y_min:y_max, :] = 200
+
+            cx = i * spacing_x
+            x_min = max(0, round(cx - half_w))
+            x_max = min(w, round(cx + half_w))
+            arr[:, x_min:x_max] = 200
     else:
-        # Disordered random orientation network
+        # Disordered random orientation network with exact distance
         for _ in range(n_fibers):
             x1 = float(rng.uniform(0, w))
             y1 = float(rng.uniform(0, h))
             angle = float(rng.uniform(0, 2 * math.pi))
-            length = math.hypot(w, h) * 1.2
+            length = math.hypot(w, h) * 1.5
             x2 = x1 + length * math.cos(angle)
             y2 = y1 + length * math.sin(angle)
-            draw.line([(x1, y1), (x2, y2)], fill=200, width=round(width_px))
 
-    arr = np.array(img, dtype=np.uint8)
+            num = np.abs((y2 - y1) * xx - (x2 - x1) * yy + x2 * y1 - y2 * x1)
+            den = math.hypot(y2 - y1, x2 - x1)
+            dist = num / max(den, 1e-6)
+            arr[dist < half_w] = 200
+
     # Add mild Gaussian noise
-    noise = rng.normal(0, 5, arr.shape)
+    noise = rng.normal(0, 3, arr.shape)
     arr = np.clip(arr.astype(float) + noise, 0, 255).astype(np.uint8)
 
     return arr

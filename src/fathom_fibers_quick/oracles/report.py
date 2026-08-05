@@ -33,6 +33,9 @@ def generate_simpoly_validation_report(
         </tr>
         """
 
+    verdict = "REPRODUCED (PYTHON_REIMPLEMENTATION_V1) / ORIGINAL_ORACLE_UNAVAILABLE" if synth_summary.get("gate_passed", True) else "PYTHON_REIMPLEMENTATION_FAILED"
+    verdict_color = "#16a34a" if synth_summary.get("gate_passed", True) else "#dc2626"
+
     html_content = f"""<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -47,6 +50,7 @@ def generate_simpoly_validation_report(
         th, td {{ border: 1px solid #cbd5e1; padding: 10px 14px; text-align: left; }}
         th {{ background-color: #f1f5f9; font-weight: 600; }}
         tr:nth-child(even) {{ background-color: #f8fafc; }}
+        .verdict {{ background: {verdict_color}; color: white; padding: 0.75rem 1.2rem; border-radius: 6px; font-weight: bold; font-size: 1.1rem; margin-bottom: 1.5rem; display: inline-block; }}
         .card {{ background: #f8fafc; border-left: 4px solid #2563eb; padding: 1rem; margin: 1rem 0; border-radius: 4px; }}
         .alert-warning {{ background: #fffbebfb; border-left: 4px solid #d97706; padding: 1rem; margin: 1rem 0; border-radius: 4px; color: #92400e; }}
         .alert-danger {{ background: #fef2f2; border-left: 4px solid #dc2626; padding: 1rem; margin: 1rem 0; border-radius: 4px; color: #991b1b; }}
@@ -56,6 +60,7 @@ def generate_simpoly_validation_report(
 <body>
     <div class="container">
         <h1>Informe de Validación SIMPoly Benchmark</h1>
+        <div class="verdict">ESTADO DE VALIDACIÓN: {verdict}</div>
         <p><strong>Fecha:</strong> {now_iso} | <strong>Fathom Fibers Quick v{prov.application_version}</strong></p>
 
         <div class="card">

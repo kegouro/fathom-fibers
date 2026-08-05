@@ -12,7 +12,7 @@ from .model import Calibration
 METHOD_NAME = "SIMPOLY_LITERATURE_REIMPLEMENTATION_V1"
 
 
-def fit_1d_gaussian(data: Sequence[float], n_bins: int = 30) -> tuple[float, float, float]:
+def fit_1d_gaussian(data: Sequence[float], n_bins: int = 40) -> tuple[float, float, float]:
     """Fits 1D Gaussian y = A * exp(-(x - mu)^2 / (2 * sigma^2)) to extracted local diameters.
 
     Returns (center_mu, sigma, amplitude).
@@ -21,29 +21,38 @@ def fit_1d_gaussian(data: Sequence[float], n_bins: int = 30) -> tuple[float, flo
     if len(arr) == 0:
         return 0.0, 0.0, 0.0
 
-    counts, bin_edges = np.histogram(arr, bins=n_bins)
+    # Exclude zero or extreme negative outliers
+    valid = arr[arr > 0.5]
+    if len(valid) == 0:
+        valid = arr
+
+    counts, bin_edges = np.histogram(valid, bins=n_bins)
     centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
 
-    max_idx = np.argmax(counts)
-    initial_mu = float(centers[max_idx])
-    initial_sigma = float(np.std(arr)) if np.std(arr) > 0 else 1.0
-    initial_amp = float(counts[max_idx])
+    max_idx = int(np.argmax(counts))
+    mode_mu = float(centers[max_idx])
+    std_val = float(np.std(valid)) if np.std(valid) > 0 else 1.0
+    max_amp = float(counts[max_idx])
 
     def gauss_fn(x: np.ndarray, a: float, mu: float, sig: float) -> np.ndarray:
-        return a * np.exp(-((x - mu) ** 2) / (2.0 * max(sig, 1e-6) ** 2))
+        return a * np.exp(-((x - mu) ** 2) / (2.0 * max(sig, 1e-3) ** 2))
 
     try:
         popt, _ = optimize.curve_fit(
             gauss_fn,
             centers,
             counts,
-            p0=[initial_amp, initial_mu, initial_sigma],
-            bounds=([0.0, 0.0, 0.1], [np.inf, np.inf, np.inf]),
-            maxfev=1000,
+            p0=[max_amp, mode_mu, max(std_val, 1.0)],
+            bounds=([0.0, 0.1, 0.1], [np.inf, np.inf, np.inf]),
+            maxfev=2000,
         )
-        return float(popt[1]), float(abs(popt[2])), float(popt[0])
-    except Exception:
-        return initial_mu, initial_sigma, initial_amp
+        fit_mu = float(popt[1])
+        if fit_mu > 0 and abs(fit_mu - mode_mu) <= max(mode_mu * 0.3, 5.0):
+            return fit_mu, float(abs(popt[2])), float(popt[0])
+    except (RuntimeError, ValueError, TypeError):
+        pass
+
+    return mode_mu, std_val, max_amp
 
 
 def run_simpoly_pipeline(
@@ -96,11 +105,18 @@ def run_simpoly_pipeline(
     # 9. Axial Skeletonization
     skel = morphology.skeletonize(clean_mask)
 
+    # Filter out junction/branchpoint pixels (neighbors >= 3) to avoid crossing distortion
+    kernel3x3 = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=int)
+    neighbors = ndimage.convolve(skel.astype(int), kernel3x3, mode="constant")
+    skel_clean = skel & (neighbors < 3)
+    if not np.any(skel_clean):
+        skel_clean = skel
+
     # 10. Distance Transform (EDT)
     edt_map = ndimage.distance_transform_edt(clean_mask)
 
-    # 11. Local Diameter Map = 2 * EDT along skeleton
-    skel_ys, skel_xs = np.where(skel)
+    # 11. Local Diameter Map = 2 * EDT along clean skeleton
+    skel_ys, skel_xs = np.where(skel_clean)
     local_diameters_px = (2.0 * edt_map[skel_ys, skel_xs]).tolist()
 
     local_diameters_m = [d_px * calibration.pixel_size_x_m for d_px in local_diameters_px]

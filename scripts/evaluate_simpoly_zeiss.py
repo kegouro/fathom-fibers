@@ -39,21 +39,24 @@ def evaluate_zeiss_campaign():
             sim_center_px = res["gaussian_center_px"]
             sim_center_nm = sim_center_px * (doc.calibration.pixel_size_x_m * 1e9)
 
+            fathom_val_str = "NOT_MEASURED"
+            manual_val_str = "NOT_MEASURED"
+
             zeiss_results.append({
                 "image_name": name,
                 "domain": domain,
                 "simpoly_px": f"{sim_center_px:.1f} px ({sim_center_nm:.1f} nm)",
-                "fathom_px": "41.8 px",
-                "manual_5x5_px": "42.0 px",
+                "fathom_px": fathom_val_str,
+                "manual_5x5_px": manual_val_str,
                 "notes": f"Cal: {doc.calibration.pixel_size_x_m*1e9:.2f} nm/px. Segmented frac: {res['segmented_fraction']*100:.1f}%",
             })
         except Exception as exc:
             zeiss_results.append({
                 "image_name": name,
-                "domain": domain,
-                "simpoly_px": "ERROR",
-                "fathom_px": "—",
-                "manual_5x5_px": "—",
+                "domain": "ANALYSIS_FAILED",
+                "simpoly_px": "ANALYSIS_FAILED",
+                "fathom_px": "NOT_MEASURED",
+                "manual_5x5_px": "NOT_MEASURED",
                 "notes": f"Error during processing: {exc}",
             })
 

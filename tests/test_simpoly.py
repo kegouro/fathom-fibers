@@ -112,8 +112,8 @@ def test_published_benchmark_reproduction_suite():
 
     assert summary["total_cases"] == 41
     assert summary["median_relative_error_percent"] <= 5.0
-    # Small width discretization causes higher P90 error on 10px phantoms, recorded in summary
-    assert "p90_relative_error_percent" in summary
+    assert summary["p90_relative_error_percent"] <= 12.0
+    assert summary["fraction_within_10_percent"] >= 0.80
 
 
 def test_simpoly_manual_5x5_protocol_preset():
