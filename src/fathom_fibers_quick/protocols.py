@@ -138,9 +138,22 @@ PRESET_BLIND_REPEATABILITY = MeasurementProtocol(
     minimum_resolved_width_px=2.5,
 )
 
-BUILTIN_PROTOCOLS = {
-    PRESET_PVDF_3_SECTIONS.protocol_id: PRESET_PVDF_3_SECTIONS,
-    PRESET_PVDF_5_SECTIONS.protocol_id: PRESET_PVDF_5_SECTIONS,
-    PRESET_GENERAL_MICROSCOPY.protocol_id: PRESET_GENERAL_MICROSCOPY,
-    PRESET_BLIND_REPEATABILITY.protocol_id: PRESET_BLIND_REPEATABILITY,
+PRESET_SIMPOLY_MANUAL_5X5 = MeasurementProtocol(
+    protocol_id="SIMPOLY_MANUAL_5X5",
+    name="SIMPoly manual reference — 5×5",
+    description="5×5 circular grid overlay (25 positions). Measure closest fully visible fiber perpendicular width.",
+    sections_per_fiber=1,
+    minimum_resolved_width_px=2.5,
+    notes_template="SIMPoly 5x5 position {position_idx}",
+)
+
+BUILTIN_PROTOCOLS: dict[str, MeasurementProtocol] = {
+    p.protocol_id: p
+    for p in [
+        PRESET_PVDF_3_SECTIONS,
+        PRESET_PVDF_5_SECTIONS,
+        PRESET_GENERAL_MICROSCOPY,
+        PRESET_BLIND_REPEATABILITY,
+        PRESET_SIMPOLY_MANUAL_5X5,
+    ]
 }

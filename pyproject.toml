@@ -14,6 +14,7 @@ dependencies = [
   "Pillow>=10.0",
   "tifffile>=2024.2",
   "scipy>=1.11",
+  "scikit-image>=0.21",
 ]
 
 [project.optional-dependencies]

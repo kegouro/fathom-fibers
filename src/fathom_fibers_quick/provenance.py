@@ -51,3 +51,9 @@ class SoftwareProvenance:
             calibration_source=project.image.calibration.source,
             protocol_id=project.active_protocol_id or "PVDF_5_SECTIONS",
         )
+
+
+def get_software_provenance(project: Project | None = None) -> SoftwareProvenance:
+    if project is not None:
+        return SoftwareProvenance.from_project(project)
+    return SoftwareProvenance()
