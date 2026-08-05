@@ -66,6 +66,10 @@ class MeasurementRecord:
     confidence: float | None = None
     created_at: str = field(default_factory=get_utc_now_iso)
     updated_at: str = field(default_factory=get_utc_now_iso)
+    uncertainty: dict[str, Any] | None = None
+    protocol_snapshot: dict[str, Any] = field(default_factory=dict)
+    repeatability_session_id: str | None = None
+    reference_group_id: str | None = None
 
     @classmethod
     def create_legacy(
@@ -239,6 +243,10 @@ class MeasurementRecord:
             "confidence": self.confidence,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "uncertainty": self.uncertainty,
+            "protocol_snapshot": self.protocol_snapshot,
+            "repeatability_session_id": self.repeatability_session_id,
+            "reference_group_id": self.reference_group_id,
         }
 
     @classmethod
@@ -301,6 +309,10 @@ class MeasurementRecord:
             confidence=data.get("confidence"),
             created_at=data.get("created_at", get_utc_now_iso()),
             updated_at=data.get("updated_at", get_utc_now_iso()),
+            uncertainty=data.get("uncertainty"),
+            protocol_snapshot=dict(data.get("protocol_snapshot", {})),
+            repeatability_session_id=data.get("repeatability_session_id"),
+            reference_group_id=data.get("reference_group_id"),
         )
 
 

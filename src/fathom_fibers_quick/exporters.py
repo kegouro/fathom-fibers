@@ -14,10 +14,12 @@ from .analysis import (
     fiber_statistics,
     format_length_m,
     get_fiber_extrema,
-    section_level_summary,
 )
+from .hierarchy import compute_hierarchical_statistics, hierarchical_bootstrap
 from .measurement_records import MeasurementRecord
 from .model import Project
+from .provenance import SoftwareProvenance
+from .repeatability import compare_automatic_and_manual
 
 GROUP_COLORS = [
     (0, 114, 178),
@@ -237,47 +239,99 @@ def export_annotated(
 
 
 def export_html_report(project: Project, annotated_name: str, path: str | Path) -> Path:
+    """Generates complete scientific HTML report according to Section 13."""
     path = Path(path)
-    f_stats = fiber_level_summary(project.measurements)
-    s_stats = section_level_summary(project.measurements)
+    hier_stats = compute_hierarchical_statistics(project)
+    boot_stats = hierarchical_bootstrap(project, n_bootstraps=500, seed=42)
+    auto_manual_pairs = compare_automatic_and_manual(project.records)
+    provenance = SoftwareProvenance.from_project(project).to_dict()
+
     per_fiber = fiber_statistics(project.measurements)
 
-    def show(stats: dict[str, float | int | None], key: str) -> str:
-        value = stats[key]
-        return "—" if value is None else format_length_m(float(value))
+    def format_val(val: float | None) -> str:
+        return "—" if val is None else format_length_m(float(val))
 
-    rows = "\n".join(
+    fiber_rows = "\n".join(
         f"<tr><td>{html.escape(fid)}</td><td>{values['n']}</td>"
-        f"<td>{values['mean_m'] * 1e6:.3f}</td><td>{values['median_m'] * 1e6:.3f}</td>"
-        f"<td>{values['min_m'] * 1e6:.3f}</td><td>{values['max_m'] * 1e6:.3f}</td></tr>"
+        f"<td>{values['mean_m'] * 1e6:.3f} µm</td><td>{values['median_m'] * 1e6:.3f} µm</td>"
+        f"<td>{values['min_m'] * 1e6:.3f} µm</td><td>{values['max_m'] * 1e6:.3f} µm</td></tr>"
         for fid, values in sorted(per_fiber.items())
     )
-    metadata = json.dumps(project.image.metadata, indent=2, ensure_ascii=False)
+
+    auto_manual_rows = "\n".join(
+        f"<tr><td>{html.escape(p['auto_id'])}</td><td>{html.escape(p['manual_id'])}</td>"
+        f"<td>{p['auto_value_m'] * 1e6:.3f} µm</td><td>{p['manual_value_m'] * 1e6:.3f} µm</td>"
+        f"<td>{p['absolute_difference_m'] * 1e6:.3f} µm</td><td>{p['relative_difference'] * 100:.1f}%</td></tr>"
+        for p in auto_manual_pairs
+    ) if auto_manual_pairs else "<tr><td colspan='6'>No hay pares automático-manual comparados.</td></tr>"
+
+    prov_json = json.dumps(provenance, indent=2, ensure_ascii=False)
+    meta_json = json.dumps(project.image.metadata, indent=2, ensure_ascii=False)
+
+    boot_mean_str = format_val(boot_stats["bootstrap_mean_m"])
+    boot_ci_low_str = format_val(boot_stats["ci_lower_m"])
+    boot_ci_high_str = format_val(boot_stats["ci_upper_m"])
+
+    sec_st = hier_stats["section_level"]
+    fib_st = hier_stats["fiber_level"]
+    img_st = hier_stats["image_level"]
+    smp_st = hier_stats["sample_level"]
+
     document = f"""<!doctype html>
-<html lang="es"><head><meta charset="utf-8"><title>Fathom Fibers Report</title>
-<style>body{{font-family:system-ui;max-width:1200px;margin:2rem auto;padding:0 1rem}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #bbb;padding:.45rem;text-align:right}}th:first-child,td:first-child{{text-align:left}}img{{max-width:100%;border:1px solid #aaa}}code,pre{{background:#f4f4f4;padding:.5rem;overflow:auto}}</style></head>
-<body><h1>Fathom Fibers Quick — Informe de Ancho Proyectado</h1>
-<p><strong>Imagen:</strong> {html.escape(project.image.path)}</p>
+<html lang="es"><head><meta charset="utf-8"><title>Fathom Fibers Scientific Report</title>
+<style>body{{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:1200px;margin:2rem auto;padding:0 1rem;color:#222;line-height:1.5}}table{{border-collapse:collapse;width:100%;margin:1rem 0}}th,td{{border:1px solid #ccc;padding:.5rem;text-align:right}}th:first-child,td:first-child{{text-align:left}}th{{background:#f0f4f8}}img{{max-width:100%;border:1px solid #aaa;margin:1rem 0}}code,pre{{background:#f4f4f4;padding:.6rem;border-radius:4px;overflow:auto}}.alert{{background:#e8f4f8;border-left:4px solid #0072b2;padding:0.8rem;margin:1rem 0}}.disclaimer{{background:#fff8e6;border-left:4px solid #e69f00;padding:0.8rem;margin:1rem 0;font-size:0.9rem}}</style></head>
+<body>
+<h1>Fathom Fibers Quick 0.3 — Informe de Medición Científica Reproducible</h1>
+<div class="alert">
+<p><strong>Muestra:</strong> {html.escape(project.sample_name)} ({html.escape(project.sample_id)})</p>
+<p><strong>Imagen fuente:</strong> {html.escape(project.image.path)}</p>
 <p><strong>Calibración:</strong> {project.image.calibration.pixel_size_x_m * 1e9:.4f} nm/px ({html.escape(project.image.calibration.source)})</p>
-<h2>1. Resumen por Fibra (medianas por fibra)</h2><ul>
-<li>Fibras identificadas: {f_stats['n_fibers']}</li>
-<li>Mediciones válidas totales: {f_stats['n_measurements']}</li>
-<li>Media de medianas: {show(f_stats, 'mean_m')}</li>
-<li>Mediana global: {show(f_stats, 'median_m')}</li>
-<li>Mínimo crudo: {show(f_stats, 'min_m')}</li>
-<li>Máximo crudo: {show(f_stats, 'max_m')}</li>
-<li>P05–P95: {show(f_stats, 'p05_m')} – {show(f_stats, 'p95_m')}</li></ul>
-<h2>2. Distribución de Secciones Locales</h2><ul>
-<li>Secciones totales aceptadas: {s_stats['n_measurements']}</li>
-<li>Media por sección: {show(s_stats, 'mean_m')}</li>
-<li>Mediana por sección: {show(s_stats, 'median_m')}</li>
-<li>Mínimo crudo: {show(s_stats, 'min_m')}</li>
-<li>Máximo crudo: {show(s_stats, 'max_m')}</li>
-<li>P05–P95: {show(s_stats, 'p05_m')} – {show(s_stats, 'p95_m')}</li></ul>
-<h2>Imagen anotada</h2><img src="{html.escape(annotated_name)}" alt="Imagen anotada">
-<h2>Estadísticas por fibra individual (µm)</h2><table><thead><tr><th>Fibra</th><th>N</th><th>Media</th><th>Mediana</th><th>Mínimo crudo</th><th>Máximo crudo</th></tr></thead><tbody>{rows}</tbody></table>
-<h2>Metadata instrumental</h2><pre>{html.escape(metadata)}</pre>
-<p><small>Advertencia: la herramienta mide <strong>ancho proyectado</strong> en la micrografía 2D. Interpretarlo como diámetro verdadero asume fibras cilíndricas, aisladas y paralelas al plano de imagen. Cruces, inclinación, cintas y fusiones requieren revisión humana.</small></p>
+<p><strong>Protocolo activo:</strong> {html.escape(project.active_protocol_id)}</p>
+</div>
+
+<h2>1. Resumen Estadístico Jerárquico (4 Niveles)</h2>
+<table>
+<thead><tr><th>Nivel</th><th>N Unidades</th><th>Media</th><th>Mediana</th><th>SD</th><th>IQR</th><th>Mín. Crudo</th><th>Máx. Crudo</th><th>P05</th><th>P95</th></tr></thead>
+<tbody>
+<tr><td><strong>Sección</strong></td><td>{sec_st['n']}</td><td>{format_val(sec_st['mean'])}</td><td>{format_val(sec_st['median'])}</td><td>{format_val(sec_st['sd'])}</td><td>{format_val(sec_st['iqr'])}</td><td>{format_val(sec_st['min'])}</td><td>{format_val(sec_st['max'])}</td><td>{format_val(sec_st['p05'])}</td><td>{format_val(sec_st['p95'])}</td></tr>
+<tr><td><strong>Fibra</strong></td><td>{fib_st['n']}</td><td>{format_val(fib_st['mean'])}</td><td>{format_val(fib_st['median'])}</td><td>{format_val(fib_st['sd'])}</td><td>{format_val(fib_st['iqr'])}</td><td>{format_val(fib_st['min'])}</td><td>{format_val(fib_st['max'])}</td><td>{format_val(fib_st['p05'])}</td><td>{format_val(fib_st['p95'])}</td></tr>
+<tr><td><strong>Imagen</strong></td><td>{img_st['n']}</td><td>{format_val(img_st['mean'])}</td><td>{format_val(img_st['median'])}</td><td>{format_val(img_st['sd'])}</td><td>{format_val(img_st['iqr'])}</td><td>{format_val(img_st['min'])}</td><td>{format_val(img_st['max'])}</td><td>{format_val(img_st['p05'])}</td><td>{format_val(img_st['p95'])}</td></tr>
+<tr><td><strong>Muestra</strong></td><td>{smp_st['n_fibers']} fibras ({smp_st['n_sections']} sec)</td><td>{format_val(smp_st['mean'])}</td><td>{format_val(smp_st['median'])}</td><td>{format_val(smp_st['sd'])}</td><td>{format_val(smp_st['iqr'])}</td><td>{format_val(smp_st['min'])}</td><td>{format_val(smp_st['max'])}</td><td>{format_val(smp_st['p05'])}</td><td>{format_val(smp_st['p95'])}</td></tr>
+</tbody>
+</table>
+
+<h3>Bootstrap Jerárquico Determinista (500 réplicas)</h3>
+<ul>
+<li>Media Bootstrap: {boot_mean_str}</li>
+<li>IC 95%: {boot_ci_low_str} – {boot_ci_high_str}</li>
+</ul>
+
+<h2>2. Imagen Aotada de Micrografía</h2>
+<img src="{html.escape(annotated_name)}" alt="Imagen anotada">
+
+<h2>3. Comparación Automático vs Referencia Manual Revisada</h2>
+<table>
+<thead><tr><th>ID Auto</th><th>ID Manual</th><th>Valor Auto</th><th>Valor Manual</th><th>Diferencia Absoluta</th><th>Diferencia Relativa</th></tr></thead>
+<tbody>{auto_manual_rows}</tbody>
+</table>
+
+<h2>4. Estadísticas por Fibra Individual (µm)</h2>
+<table><thead><tr><th>Fibra</th><th>N Secciones</th><th>Media</th><th>Mediana</th><th>Mínimo Crudo</th><th>Máximo Crudo</th></tr></thead>
+<tbody>{fiber_rows}</tbody></table>
+
+<h2>5. Software Provenance & Metadata</h2>
+<pre>{html.escape(prov_json)}</pre>
+<pre>{html.escape(meta_json)}</pre>
+
+<div class="disclaimer">
+<h3>Declaraciones de Limitaciones Científicas Obligatorias</h3>
+<ul>
+<li>ⓘ <strong>Las mediciones representan geometría proyectada 2D.</strong> La interpretación física depende de calibración, resolución y geometría de la muestra.</li>
+<li>ⓘ <strong>Los resultados automáticos son propuestas revisadas.</strong> Las referencias manuales representan la 'Referencia manual revisada', no un ground truth absoluto.</li>
+<li>ⓘ <strong>La ausencia de uncertainty no equivale a uncertainty cero.</strong> Los componentes de incertidumbre se expresan explícitamente cuando existe evidencia empírica.</li>
+</ul>
+</div>
 </body></html>"""
+
     path.write_text(document, encoding="utf-8")
     return path

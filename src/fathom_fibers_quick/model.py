@@ -71,6 +71,10 @@ class Project:
     active_fiber_id: str = "F001"
     next_fiber_counter: int = 1
     next_record_counter: int = 1
+    active_protocol_id: str = "PVDF_5_SECTIONS"
+    protocols: dict[str, Any] = field(default_factory=dict)
+    sample_id: str = "SAMPLE_001"
+    sample_name: str = "Muestra PVDF Electrospinning"
     fiber_notes: dict[str, str] = field(default_factory=dict)
     group_names: dict[int, str] = field(default_factory=dict)
     manual_ranges: list[dict[str, Any]] = field(default_factory=list)
@@ -86,7 +90,7 @@ class Project:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "image": {
                 "path": self.image.path,
                 "width_px": self.image.width_px,
@@ -103,6 +107,10 @@ class Project:
             "active_fiber_id": self.active_fiber_id,
             "next_fiber_counter": self.next_fiber_counter,
             "next_record_counter": self.next_record_counter,
+            "active_protocol_id": self.active_protocol_id,
+            "protocols": self.protocols,
+            "sample_id": self.sample_id,
+            "sample_name": self.sample_name,
             "fiber_notes": self.fiber_notes,
             "group_names": {str(k): v for k, v in self.group_names.items()},
             "manual_ranges": self.manual_ranges,
@@ -118,11 +126,9 @@ class Project:
 
         records: list[MeasurementRecord] = []
 
-        # 1. Check if new records schema is present
         if "records" in data:
             for item in data["records"]:
                 records.append(MeasurementRecord.from_dict(item))
-        # 2. Migration from legacy schema (measurements array)
         elif "measurements" in data:
             for item in data["measurements"]:
                 d = dict(item)
@@ -155,7 +161,6 @@ class Project:
                 rec.method = source_str
                 records.append(rec)
 
-        # Compute next counters
         used_records = []
         for r in records:
             if r.measurement_id.startswith("M") and r.measurement_id[1:].isdigit():
@@ -171,7 +176,7 @@ class Project:
         stored_next_fib = int(data.get("next_fiber_counter", next_fib))
 
         return cls(
-            schema_version=int(data.get("schema_version", 2)),
+            schema_version=int(data.get("schema_version", 3)),
             image=image,
             records=records,
             project_path=data.get("project_path"),
@@ -180,6 +185,10 @@ class Project:
             active_fiber_id=str(data.get("active_fiber_id", "F001")),
             next_fiber_counter=max(stored_next_fib, next_fib),
             next_record_counter=max(stored_next_rec, next_rec),
+            active_protocol_id=str(data.get("active_protocol_id", "PVDF_5_SECTIONS")),
+            protocols=dict(data.get("protocols", {})),
+            sample_id=str(data.get("sample_id", "SAMPLE_001")),
+            sample_name=str(data.get("sample_name", "Muestra PVDF Electrospinning")),
             fiber_notes=dict(data.get("fiber_notes", {})),
             group_names={int(k): str(v) for k, v in data.get("group_names", {}).items()},
             manual_ranges=list(data.get("manual_ranges", [])),
