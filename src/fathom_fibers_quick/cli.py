@@ -87,9 +87,8 @@ def main() -> None:
     if args.command == "inspect":
         raise SystemExit(_inspect(args.paths, args.hash))
     if args.command == "evaluate-auto-roi":
-        from scripts.evaluate_auto_roi import run_campaign
-        search_dirs = [Path(args.input_dir), Path("/home/kegouro/HIBRIS/Workshop ⁄ Proyectos")]
-        res = run_campaign(search_dirs, Path(args.output_dir))
+        from scripts.evaluate_auto_roi import run_real_campaign
+        res, _inv, _rois = run_real_campaign(Path(args.input_dir), Path(args.output_dir))
         print(f"Informe de evaluación de campaña Auto-ROI: {res}")
         return
     if args.command == "plugins":

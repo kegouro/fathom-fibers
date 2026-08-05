@@ -56,45 +56,45 @@ class ResolutionPreset:
 PRESET_HIGH_MAG_FINE = ResolutionPreset(
     name="HIGH_MAG_FINE",
     nm_per_px_min=0.0,
-    nm_per_px_max=5.0,
-    expected_width_px=20.0,
-    min_area_px=60,
+    nm_per_px_max=10.0,
+    expected_width_px=30.0,
+    min_area_px=80,
     min_elongation=2.5,
-    min_width_px=4.0,
+    min_width_px=5.0,
     n_sections=5,
-    description="Alta magnificación (<5 nm/px). Medición local precisa de fibras aisladas.",
+    description="Alta magnificación (≤10 nm/px). Medición precisa de fibras individuales y bordes.",
 )
 
 PRESET_MID_MAG_GENERAL = ResolutionPreset(
     name="MID_MAG_GENERAL",
-    nm_per_px_min=5.0,
-    nm_per_px_max=30.0,
-    expected_width_px=10.0,
-    min_area_px=35,
+    nm_per_px_min=10.0,
+    nm_per_px_max=80.0,
+    expected_width_px=12.0,
+    min_area_px=40,
     min_elongation=2.2,
-    min_width_px=2.0,
+    min_width_px=3.0,
     n_sections=3,
-    description="Magnificación media (5-30 nm/px). Candidatos simples y conteo parcial revisable.",
+    description="Magnificación media (10-80 nm/px). Segmentos visibles y candidatos revisables.",
 )
 
 PRESET_LOW_MAG_NETWORK = ResolutionPreset(
     name="LOW_MAG_NETWORK",
-    nm_per_px_min=30.0,
+    nm_per_px_min=80.0,
     nm_per_px_max=1e9,
-    expected_width_px=3.5,
+    expected_width_px=3.0,
     min_area_px=20,
     min_elongation=2.0,
     min_width_px=1.5,
     n_sections=3,
-    description="Baja magnificación (>30 nm/px). Redes densas / subresueltas. Requiere alta confianza o medición manual.",
+    description="Baja magnificación (>80 nm/px). Redes densas / fibras subresueltas. Solo medición manual.",
 )
 
 
 def get_preset_for_calibration(calibration: Calibration) -> ResolutionPreset:
     nm_px = calibration.pixel_size_x_m * 1e9
-    if nm_px < 5.0:
+    if nm_px <= 10.0:
         return PRESET_HIGH_MAG_FINE
-    elif nm_px <= 30.0:
+    elif nm_px <= 80.0:
         return PRESET_MID_MAG_GENERAL
     else:
         return PRESET_LOW_MAG_NETWORK
@@ -103,31 +103,29 @@ def get_preset_for_calibration(calibration: Calibration) -> ResolutionPreset:
 def check_resolution_resolvability(
     roi_patch: np.ndarray,
     calibration: Calibration,
-    expected_width_m: float = 50e-9,
+    expected_width_m: float = 300e-9,  # Default ~300 nm PVDF electrospun fibers
 ) -> tuple[str, str]:
-    """Estimates resolvability before ROI analysis."""
+    """Estimates resolvability before ROI analysis based on physical scale and edge gradients."""
     nm_per_px = calibration.pixel_size_x_m * 1e9
     expected_px = expected_width_m / calibration.pixel_size_x_m
 
     gy, gx = np.gradient(roi_patch.astype(float))
     grad_mag = float(np.max(np.hypot(gx, gy))) if roi_patch.size > 0 else 0.0
 
-    if expected_px < 2.5:
+    if expected_px < 3.5 or nm_per_px > 85.0:
         return (
             "RESOLUTION_INSUFFICIENT",
-            (f"El ancho esperado ({expected_width_m * 1e9:.1f} nm) equivale a solo {expected_px:.1f} px a {nm_per_px:.2f} nm/px. "
-            "Resolución insuficiente para mediciones automáticas confiables. Se recomienda mayor magnificación."),
+            f"El ancho físico esperado (~{expected_width_m * 1e9:.0f} nm) equivale a solo {expected_px:.1f} px a {nm_per_px:.2f} nm/px. Resolución insuficiente para diámetros automáticos confiables. Usar magnificación mayor o caliper manual.",
         )
-    elif expected_px < 5.0 or (grad_mag < 1.0 and roi_patch.size > 100):
+    elif expected_px < 7.0 or grad_mag < 1.0:
         return (
             "RESOLUTION_MARGINAL",
-            (f"El ancho esperado equivale a {expected_px:.1f} px ({nm_per_px:.2f} nm/px). "
-            "Resolución marginal; se recomienda revisión manual estricta de candidatos."),
+            f"El ancho esperado equivale a {expected_px:.1f} px ({nm_per_px:.2f} nm/px). Resolución marginal; requiere revisión manual estricta de candidatos.",
         )
     else:
         return (
             "RESOLUTION_OK",
-            f"Resolución adecuada ({expected_px:.1f} px por ancho a {nm_per_px:.2f} nm/px).",
+            f"Resolución adecuada ({expected_px:.1f} px por fibra a {nm_per_px:.2f} nm/px).",
         )
 
 
@@ -156,18 +154,33 @@ class AutoFiberCandidate:
     status: str = "PENDING"  # "PENDING", "ACCEPTED", "REJECTED", "EDITED"
     threshold_method: str = "Otsu"
     curved_trace_used: bool = False
+    preset_name: str = "MID_MAG_GENERAL"
 
     @property
     def confidence_level(self) -> str:
-        if "TOUCHES_ROI_EDGE" in self.quality_flags or "TOUCHES_INVALID_MASK" in self.quality_flags:
+        """Strict confidence classification enforcing Requirements 9 & 10."""
+        disqualifying_flags = {
+            "TOUCHES_ROI_EDGE",
+            "TOUCHES_INVALID_MASK",
+            "TOO_SMALL",
+            "LOW_ELONGATION",
+            "LIKELY_MERGED",
+            "WIDTH_TOO_VARIABLE",
+            "WIDTH_ESTIMATORS_DISAGREE",
+            "PROFILE_FAILED",
+            "RESOLUTION_MARGINAL",
+            "RESOLUTION_INSUFFICIENT",
+            "CURVED_TRACE_UNSTABLE",
+        }
+        if self.quality_flags & disqualifying_flags:
             return "Baja"
-        if "TOO_SMALL" in self.quality_flags or "LOW_ELONGATION" in self.quality_flags or "LIKELY_MERGED" in self.quality_flags:
+
+        if self.preset_name == "LOW_MAG_NETWORK":
             return "Baja"
-        if "WIDTH_ESTIMATORS_DISAGREE" in self.quality_flags:
-            return "Baja"
-        if self.confidence_score >= 0.70 and not self.quality_flags:
+
+        if self.confidence_score >= 0.70 and len(self.quality_flags) == 0:
             return "Alta"
-        if self.confidence_score >= 0.40:
+        elif self.confidence_score >= 0.40:
             return "Media"
         return "Baja"
 
@@ -197,7 +210,7 @@ class AutoROISummary:
     exclusion_reasons: dict[str, int] = field(default_factory=dict)
 
 
-# ---------- Thresholding Strategies ----------
+# ---------- Thresholding Strategies with Diagnostic Scoring ----------
 
 def otsu_threshold(gray_patch: np.ndarray) -> float:
     flat = gray_patch.ravel()
@@ -230,33 +243,61 @@ def percentile_threshold(norm_patch: np.ndarray, percentile: float = 65.0) -> fl
     return float(np.percentile(norm_patch, percentile))
 
 
-def local_adaptive_threshold(norm_patch: np.ndarray, window_size: int = 31, offset: float = 0.03) -> np.ndarray:
-    """Pure NumPy/SciPy local adaptive threshold using uniform filter for local mean."""
+def local_adaptive_threshold(norm_patch: np.ndarray, window_size: int = 35, offset: float = 0.03) -> np.ndarray:
     local_mean = ndimage.uniform_filter(norm_patch, size=window_size)
     return norm_patch > (local_mean + offset)
 
 
+def evaluate_segmentation_quality(binary_mask: np.ndarray) -> float:
+    """Computes diagnostic quality score for a segmentation mask on SEM image."""
+    frac = float(binary_mask.mean())
+    if frac < 0.01 or frac > 0.60:
+        return 0.05
+
+    labeled, num_features = ndimage.label(binary_mask)
+    if num_features == 0:
+        return 0.0
+
+    counts = np.bincount(labeled.ravel())[1:]  # Exclude background
+    max_comp_frac = float(counts.max()) / float(binary_mask.sum())
+
+    # Heavy penalty if one giant merged component covers > 40% of foreground
+    penalty = 1.0
+    if max_comp_frac > 0.40:
+        penalty *= 0.20
+    if num_features > 150:
+        penalty *= 0.30
+
+    base_score = (1.0 - abs(frac - 0.25) * 2.0) * penalty
+    return max(0.01, float(base_score))
+
+
 def auto_threshold(norm_patch: np.ndarray, is_bright: bool) -> tuple[np.ndarray, str]:
-    """Evaluates multiple segmentation methods and picks best strategy."""
-    # Strategy 1: Global Otsu
+    """Evaluates multiple segmentation methods and picks best strategy via quality score."""
+    # Method 1: Global Otsu
     t_otsu = otsu_threshold(norm_patch * 255.0) / 255.0
     bin_otsu = norm_patch > t_otsu if is_bright else norm_patch < t_otsu
+    score_otsu = evaluate_segmentation_quality(bin_otsu)
 
-    # Strategy 2: Local Adaptive
+    # Method 2: Robust Percentile
+    t_perc = percentile_threshold(norm_patch, 65.0)
+    bin_perc = norm_patch > t_perc if is_bright else norm_patch < t_perc
+    score_perc = evaluate_segmentation_quality(bin_perc)
+
+    # Method 3: Local Adaptive
     if is_bright:
         bin_local = local_adaptive_threshold(norm_patch, window_size=35, offset=0.03)
     else:
         bin_local = norm_patch < (ndimage.uniform_filter(norm_patch, size=35) - 0.03)
+    score_local = evaluate_segmentation_quality(bin_local)
 
-    # Evaluate fraction covered
-    frac_otsu = float(bin_otsu.mean())
-    frac_local = float(bin_local.mean())
-
-    # Prefer local if otsu gives extreme fraction (< 3% or > 60%)
-    if (frac_otsu < 0.03 or frac_otsu > 0.60) and (0.05 <= frac_local <= 0.45):
-        return bin_local, "Local Adaptativo"
-    else:
-        return bin_otsu, "Otsu Global"
+    candidates = [
+        (score_local, bin_local, "Local Adaptativo"),
+        (score_otsu, bin_otsu, "Otsu Global"),
+        (score_perc, bin_perc, "Percentil Robusto"),
+    ]
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1], candidates[0][2]
 
 
 # ---------- Curved Tracing Helper ----------
@@ -268,13 +309,12 @@ def trace_curved_centerline(
     center_abs: tuple[float, float],
     n_slices: int = 9,
 ) -> tuple[list[tuple[float, float]], list[np.ndarray], bool]:
-    """Estimates smoothed curved centerline using slice centroids along PCA main axis."""
     pts_rel = np.column_stack((abs_xs - center_abs[0], abs_ys - center_abs[1]))
     projections = pts_rel @ v_dir
     t_min, t_max = float(projections.min()), float(projections.max())
     span = t_max - t_min
 
-    if span < 15.0 or len(abs_xs) < 40:
+    if span < 18.0 or len(abs_xs) < 40:
         return [], [], False
 
     slice_edges = np.linspace(t_min + 0.10 * span, t_max - 0.10 * span, n_slices + 1)
@@ -288,14 +328,12 @@ def trace_curved_centerline(
     if len(centroids) < 3:
         return [], [], False
 
-    # Smooth centroids with Gaussian filter
     c_arr = np.array(centroids)
     smoothed_x = ndimage.gaussian_filter1d(c_arr[:, 0], sigma=1.0)
     smoothed_y = ndimage.gaussian_filter1d(c_arr[:, 1], sigma=1.0)
 
     centerline_pts = [(float(x), float(y)) for x, y in zip(smoothed_x, smoothed_y, strict=True)]
 
-    # Compute tangents and normals
     tangents: list[np.ndarray] = []
     for i in range(len(centerline_pts)):
         if i == 0:
@@ -344,6 +382,10 @@ def analyze_roi(
 
     x0, y0, x1, y1 = roi_bbox
     height_img, width_img = gray.shape[:2]
+
+    # Strict footer exclusion on y1
+    if footer_bounds is not None:
+        y1 = min(y1, footer_bounds[0])
 
     # Clamp bbox within image bounds
     x0 = max(0, min(x0, width_img - 1))
@@ -417,6 +459,9 @@ def analyze_roi(
 
         flags: set[str] = set()
 
+        if res_status != "RESOLUTION_OK":
+            flags.add(res_status)
+
         if area_px < area_limit:
             flags.add("TOO_SMALL")
 
@@ -458,7 +503,6 @@ def analyze_roi(
         v_img = np.array([v_phys[0] / px_w_m, v_phys[1] / px_h_m], dtype=float)
         v_norm = np.linalg.norm(v_img)
         v_dir = v_img / v_norm if v_norm > 0 else np.array([1.0, 0.0])
-        np.array([-v_dir[1], v_dir[0]], dtype=float)
 
         center_abs = (float(abs_xs.mean()), float(abs_ys.mean()))
         pts_rel = np.column_stack((abs_xs - center_abs[0], abs_ys - center_abs[1]))
@@ -467,13 +511,12 @@ def analyze_roi(
         t_min, t_max = float(projections.min()), float(projections.max())
         span = t_max - t_min
 
-        # Check LIKELY_MERGED (Section G)
+        # LIKELY_MERGED Check
         expected_width_px = preset.expected_width_px
         global_width_est_px = (area_px / max(span, 1.0))
-        if global_width_est_px > 3.0 * expected_width_px or (area_px > 500 and elongation < 2.8):
+        if global_width_est_px > 2.8 * expected_width_px or (area_px > 450 and elongation < 2.5):
             flags.add("LIKELY_MERGED")
 
-        # Curved centerline option (Section H)
         curved_used = False
         centerline_pts: list[tuple[float, float]] = []
         tangents: list[np.ndarray] = []
@@ -511,11 +554,9 @@ def analyze_roi(
                 if val_res.valid:
                     profile_w_m = calibration.distance_m(p1, p2)
 
-                    # Mask width estimation
                     mask_w_px = float(offsets[ri] - offsets[li])
                     mask_w_m = mask_w_px * calibration.pixel_size_x_m
 
-                    # Discrepancy comparison (Section I)
                     discrepancy = abs(mask_w_m - profile_w_m) / max(profile_w_m, 1e-12)
                     sec_flags: set[str] = set()
                     if discrepancy >= 0.20:
@@ -573,6 +614,7 @@ def analyze_roi(
             status="PENDING",
             threshold_method=chosen_method_name,
             curved_trace_used=curved_used,
+            preset_name=preset.name,
         )
         candidates.append(cand)
 
@@ -602,7 +644,7 @@ def analyze_roi(
     return candidates, summary
 
 
-# ---------- Diagnostic ROIs & Comparisons (Sections B, M, C) ----------
+# ---------- Diagnostic ROIs & Comparisons ----------
 
 def generate_diagnostic_rois(
     image_shape: tuple[int, int],  # (height, width)
@@ -610,13 +652,12 @@ def generate_diagnostic_rois(
     n_rois: int = 4,
     roi_size: int = 500,
 ) -> list[tuple[int, int, int, int]]:
-    """Generates 3-6 diagnostic ROIs avoiding footers and edges."""
+    """Generates 4 diagnostic ROIs strictly avoiding footers and edges."""
     height, width = image_shape
     usable_h = footer_bounds[0] if footer_bounds else height
     margin = 50
 
     if width < roi_size + 2 * margin or usable_h < roi_size + 2 * margin:
-        # Fallback to single centered box
         cx, cy = width // 2, usable_h // 2
         half = min(width, usable_h) // 3
         return [(max(0, cx - half), max(0, cy - half), min(width, cx + half), min(usable_h, cy + half))]
@@ -627,19 +668,21 @@ def generate_diagnostic_rois(
     r_half = roi_size // 2
     rois.append((cx - r_half, cy - r_half, cx + r_half, cy + r_half))
 
-    # Quadrant ROIs
+    # Top-Left ROI
     q_size = min(roi_size, (width - 3 * margin) // 2, (usable_h - 3 * margin) // 2)
     if q_size > 100:
         rois.append((margin, margin, margin + q_size, margin + q_size))
+        # Top-Right ROI
         rois.append((width - margin - q_size, margin, width - margin, margin + q_size))
-        rois.append((margin, usable_h - margin - q_size, margin + q_size, usable_h - margin))
-        rois.append((width - margin - q_size, usable_h - margin - q_size, width - margin, usable_h - margin))
+        # Mid-Bottom ROI (strictly above footer)
+        b_y1 = usable_h - margin
+        b_y0 = b_y1 - q_size
+        rois.append((cx - q_size // 2, b_y0, cx + q_size // 2, b_y1))
 
     return rois[:n_rois]
 
 
 def compare_candidate_to_manual(candidate: AutoFiberCandidate, manual: Measurement) -> dict[str, float]:
-    """Compares candidate median section to a manual reference measurement."""
     cand_w = candidate.median_width_m or 0.0
     man_w = manual.width_m
     abs_diff = abs(cand_w - man_w)
@@ -665,12 +708,10 @@ def generate_diagnostic_panel(
     summary: AutoROISummary,
     title_info: str = "",
 ) -> Image.Image:
-    """Generates multi-panel Pillow diagnostic image for campaign evaluation."""
     x0, y0, x1, y1 = roi_bbox
     crop = gray[y0:y1, x0:x1]
     h, w = crop.shape[:2]
 
-    # Create 4 panels side-by-side: 1. Original 2. Normalized 3. Segmented 4. Overlay
     panel_w, panel_h = max(250, w), max(250, h)
 
     orig_img = Image.fromarray(np.clip(crop, 0, 255).astype(np.uint8)).resize((panel_w, panel_h))
@@ -678,7 +719,6 @@ def generate_diagnostic_panel(
     norm_crop = np.clip((crop - p2) / max(p98 - p2, 1e-5) * 255.0, 0, 255).astype(np.uint8)
     norm_img = Image.fromarray(norm_crop).resize((panel_w, panel_h))
 
-    # Canvas overlay panel
     overlay = orig_img.convert("RGB").copy()
     draw = ImageDraw.Draw(overlay)
     font = ImageFont.load_default(size=12)
@@ -696,7 +736,6 @@ def generate_diagnostic_panel(
             p2c = ((pm.p2[0] - x0) * scale_x, (pm.p2[1] - y0) * scale_y)
             draw.line([p1c, p2c], fill=color, width=2)
 
-    # Combine 3 panels horizontally + header banner
     combined = Image.new("RGB", (panel_w * 3, panel_h + 60), color=(30, 30, 30))
     combined.paste(orig_img.convert("RGB"), (0, 60))
     combined.paste(norm_img.convert("RGB"), (panel_w, 60))

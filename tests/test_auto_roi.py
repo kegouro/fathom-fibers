@@ -97,8 +97,20 @@ def test_preset_selection_logic():
     p2 = get_preset_for_calibration(Calibration(15e-9, 15e-9, "t"))
     assert p2.name == "MID_MAG_GENERAL"
 
-    p3 = get_preset_for_calibration(Calibration(50e-9, 50e-9, "t"))
+    p3 = get_preset_for_calibration(Calibration(100e-9, 100e-9, "t"))
     assert p3.name == "LOW_MAG_NETWORK"
+
+
+def test_dense_network_safety_zero_high_confidence():
+    gray = np.full((150, 150), 20.0, dtype=np.float32)
+    gray[20:130, 60:80] = 220.0
+    cal_low = Calibration(180e-9, 180e-9, "low_mag")
+
+    candidates, summary = analyze_roi(gray, (10, 10, 140, 140), cal_low)
+    assert summary.high_confidence == 0
+    assert summary.resolution_status == "RESOLUTION_INSUFFICIENT"
+    for cand in candidates:
+        assert cand.confidence_level == "Baja"
 
 
 def test_preset_json_round_trip():
