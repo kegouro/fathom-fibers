@@ -13,11 +13,11 @@ from PIL import Image, ImageTk
 
 from .analysis import (
     classify_fibers,
-    fiber_level_summary,
+    compute_histogram_data,
     fiber_statistics,
     format_length_m,
+    get_fiber_extrema,
     one_click_measurement,
-    section_level_summary,
     snap_two_click_edges,
     validate_measurement_geometry,
 )
@@ -36,11 +36,10 @@ class FiberQuickApp(tk.Tk):
     GROUP_HEX: ClassVar[list[str]] = ["#0072B2", "#E69F00", "#009E73", "#CC79A7"]
     SELECTED = "#FFBF00"
 
-
     def __init__(self, initial_path: str | None = None) -> None:
         super().__init__()
         self.title("Fathom Fibers Quick 0.1 — Manual-first SEM measurement")
-        self.geometry("1500x900")
+        self.geometry("1550x920")
         self.minsize(1100, 700)
 
         self.project: Project | None = None
@@ -52,23 +51,34 @@ class FiberQuickApp(tk.Tk):
         self.offset_y = 0.0
         self._has_fit = False
         self._is_dirty = False
-        self.pending_point: tuple[float, float] | None = None
-        self.pending_canvas_item: int | None = None
+
+        # Interactive selection state
         self.selected_measurement_id: str | None = None
+        self.active_fiber_id: str = "F001"
         self.drag_endpoint: int | None = None
         self.dragging_measurement_id: str | None = None
+        self.pending_point: tuple[float, float] | None = None
+        self.histogram_filter: tuple[str, int, list[str]] | None = None  # (mode, bin_idx, item_ids)
+
         self.pan_anchor: tuple[float, float] | None = None
         self.pan_offset_anchor: tuple[float, float] | None = None
 
+        # Variables
         self.tool_var = tk.StringVar(value="select")
-        self.fiber_var = tk.StringVar(value="F001")
+        self.target_sections_var = tk.StringVar(value="5 secciones")
+        self.auto_advance_var = tk.BooleanVar(value=True)
+        self.show_all_sections_var = tk.BooleanVar(value=True)
         self.defect_var = tk.StringVar(value="None")
         self.search_radius_var = tk.DoubleVar(value=60.0)
         self.classification_var = tk.StringVar(value="Auto")
         self.footer_visible_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Abre un TIFF Zeiss para comenzar.")
         self.calibration_var = tk.StringVar(value="Sin imagen")
-        self.selected_info_var = tk.StringVar(value="Sin selección")
+        self.protocol_status_var = tk.StringVar(value="Protocolo: 0 / 5 (Incompleto)")
+
+        # Histogram variables
+        self.hist_mode_var = tk.StringVar(value="fiber")
+        self.hist_bins_var = tk.IntVar(value=10)
 
         self._build_ui()
         self._bind_shortcuts()
@@ -131,13 +141,13 @@ class FiberQuickApp(tk.Tk):
     def _build_menu(self) -> None:
         menu = tk.Menu(self)
         file_menu = tk.Menu(menu, tearoff=False)
-        file_menu.add_command(label="Abrir imagen…", command=self.open_image_dialog, accelerator="Ctrl+O")
+        file_menu.add_command(label="Abrir imagen… (Ctrl+O)", command=self.open_image_dialog, accelerator="Ctrl+O")
         file_menu.add_command(label="Abrir proyecto…", command=self.open_project_dialog)
         file_menu.add_separator()
-        file_menu.add_command(label="Guardar proyecto…", command=self.save_project_dialog, accelerator="Ctrl+S")
+        file_menu.add_command(label="Guardar proyecto… (Ctrl+S)", command=self.save_project_dialog, accelerator="Ctrl+S")
         file_menu.add_separator()
         file_menu.add_command(label="Exportar CSV…", command=self.export_csv_dialog)
-        file_menu.add_command(label="Exportar imagen anotada…", command=self.export_annotated_dialog)
+        file_menu.add_command(label="Exportar imagen anotada… (Ctrl+E)", command=self.export_annotated_dialog, accelerator="Ctrl+E")
         file_menu.add_command(label="Exportar informe HTML…", command=self.export_report_dialog)
         file_menu.add_separator()
         file_menu.add_command(label="Salir", command=self._on_app_closing)
@@ -151,19 +161,46 @@ class FiberQuickApp(tk.Tk):
 
     def _build_left_panel(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="FATHOM FIBERS", font=("TkDefaultFont", 14, "bold")).pack(anchor=tk.W)
-        ttk.Label(parent, text="MVP manual y asistido", foreground="#666").pack(anchor=tk.W, pady=(0, 8))
+        ttk.Label(parent, text="MVP manual y asistido", foreground="#666").pack(anchor=tk.W, pady=(0, 4))
 
-        file_box = ttk.LabelFrame(parent, text="Proyecto", padding=6)
-        file_box.pack(fill=tk.X, pady=4)
-        ttk.Button(file_box, text="Abrir TIFF / imagen", command=self.open_image_dialog).pack(fill=tk.X, pady=2)
-        ttk.Button(file_box, text="Guardar proyecto", command=self.save_project_dialog).pack(fill=tk.X, pady=2)
-        ttk.Label(file_box, textvariable=self.calibration_var, wraplength=225).pack(anchor=tk.W, pady=(5, 0))
+        # Protocol Panel
+        proto_box = ttk.LabelFrame(parent, text="PROTOCOLO DE MEDICIÓN", padding=6)
+        proto_box.pack(fill=tk.X, pady=4)
 
-        fiber_box = ttk.LabelFrame(parent, text="Fibra actual", padding=6)
-        fiber_box.pack(fill=tk.X, pady=4)
-        ttk.Entry(fiber_box, textvariable=self.fiber_var).pack(fill=tk.X)
-        ttk.Button(fiber_box, text="Nueva fibra", command=self.new_fiber).pack(fill=tk.X, pady=(4, 0))
+        row_target = ttk.Frame(proto_box)
+        row_target.pack(fill=tk.X, pady=2)
+        ttk.Label(row_target, text="Objetivo:").pack(side=tk.LEFT)
+        target_cb = ttk.Combobox(
+            row_target,
+            textvariable=self.target_sections_var,
+            values=("3 secciones", "5 secciones", "Libre (0)"),
+            state="readonly",
+            width=12,
+        )
+        target_cb.pack(side=tk.RIGHT)
+        target_cb.bind("<<ComboboxSelected>>", self._on_target_sections_changed)
 
+        row_fiber = ttk.Frame(proto_box)
+        row_fiber.pack(fill=tk.X, pady=4)
+        ttk.Label(row_fiber, text="Fibra actual:", font=("TkDefaultFont", 10, "bold")).pack(side=tk.LEFT)
+        self.lbl_active_fiber = ttk.Label(row_fiber, text="F001", font=("TkDefaultFont", 11, "bold"), foreground="#0072B2")
+        self.lbl_active_fiber.pack(side=tk.LEFT, padx=6)
+        ttk.Button(row_fiber, text="+ Nueva (N)", command=self.new_fiber, width=10).pack(side=tk.RIGHT)
+
+        ttk.Label(proto_box, textvariable=self.protocol_status_var, font=("TkDefaultFont", 9, "bold")).pack(anchor=tk.W, pady=2)
+
+        nav_row = ttk.Frame(proto_box)
+        nav_row.pack(fill=tk.X, pady=4)
+        ttk.Button(nav_row, text="◀ Anter. (PgUp)", command=self.prev_fiber, width=13).pack(side=tk.LEFT, expand=True)
+        ttk.Button(nav_row, text="Siguiente ▶ (PgDn)", command=self.next_fiber, width=13).pack(side=tk.RIGHT, expand=True)
+
+        ttk.Checkbutton(
+            proto_box,
+            text="Avanzar auto al completar",
+            variable=self.auto_advance_var,
+        ).pack(anchor=tk.W, pady=2)
+
+        # Tools Panel
         tools = ttk.LabelFrame(parent, text="Herramienta", padding=6)
         tools.pack(fill=tk.X, pady=4)
         choices = [
@@ -179,7 +216,19 @@ class FiberQuickApp(tk.Tk):
         ttk.Label(radius_row, text="Radio auto (px):").pack(side=tk.LEFT)
         ttk.Spinbox(radius_row, from_=10, to=300, increment=5, textvariable=self.search_radius_var, width=7).pack(side=tk.RIGHT)
 
-        review = ttk.LabelFrame(parent, text="Revisión", padding=6)
+        # Display & View Panel
+        display = ttk.LabelFrame(parent, text="Vista y Canvas", padding=6)
+        display.pack(fill=tk.X, pady=4)
+        ttk.Checkbutton(display, text="Mostrar todas las fibras", variable=self.show_all_sections_var, command=self.render).pack(anchor=tk.W)
+        ttk.Checkbutton(display, text="Mostrar zona del footer", variable=self.footer_visible_var, command=self.render).pack(anchor=tk.W)
+
+        btn_row = ttk.Frame(display)
+        btn_row.pack(fill=tk.X, pady=2)
+        ttk.Button(btn_row, text="Ajustar (F)", command=self.fit_image).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+        ttk.Button(btn_row, text="Centrar (C)", command=self.center_selection).pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=1)
+
+        # Review Panel
+        review = ttk.LabelFrame(parent, text="Revisión de Medición", padding=6)
         review.pack(fill=tk.X, pady=4)
         ttk.Label(review, text="Defecto / observación:").pack(anchor=tk.W)
         defect_combo = ttk.Combobox(
@@ -189,11 +238,15 @@ class FiberQuickApp(tk.Tk):
             values=("None", "Bead", "Constriction", "Fused", "Debris", "Ribbon-like", "Ambiguous", "Other"),
         )
         defect_combo.pack(fill=tk.X, pady=2)
-        ttk.Button(review, text="Aplicar a medición", command=self.apply_defect).pack(fill=tk.X, pady=2)
-        ttk.Button(review, text="Aceptar / rechazar", command=self.toggle_selected_acceptance).pack(fill=tk.X, pady=2)
-        ttk.Button(review, text="Eliminar seleccionada", command=self.delete_selected).pack(fill=tk.X, pady=2)
+        ttk.Button(review, text="Aplicar defecto", command=self.apply_defect).pack(fill=tk.X, pady=2)
 
-        classify = ttk.LabelFrame(parent, text="Familias de tamaño", padding=6)
+        rev_btns = ttk.Frame(review)
+        rev_btns.pack(fill=tk.X, pady=2)
+        ttk.Button(rev_btns, text="Aceptar / Rechazar (R)", command=self.toggle_selected_acceptance).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+        ttk.Button(rev_btns, text="Eliminar (Del)", command=self.delete_selected).pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=1)
+
+        # Classification Panel
+        classify = ttk.LabelFrame(parent, text="Familias de Tamaño", padding=6)
         classify.pack(fill=tk.X, pady=4)
         ttk.Combobox(
             classify,
@@ -203,14 +256,6 @@ class FiberQuickApp(tk.Tk):
             width=8,
         ).pack(fill=tk.X)
         ttk.Button(classify, text="Clasificar fibras", command=self.classify).pack(fill=tk.X, pady=(4, 0))
-        ttk.Label(classify, text="Usa la mediana de cada fibra; el color no prueba una familia física.", wraplength=225, foreground="#666").pack(anchor=tk.W, pady=(4, 0))
-
-        display = ttk.LabelFrame(parent, text="Vista", padding=6)
-        display.pack(fill=tk.X, pady=4)
-        ttk.Checkbutton(display, text="Mostrar zona del footer", variable=self.footer_visible_var, command=self.render).pack(anchor=tk.W)
-        ttk.Button(display, text="Ajustar imagen", command=self.fit_image).pack(fill=tk.X, pady=2)
-
-        ttk.Label(parent, textvariable=self.selected_info_var, wraplength=230).pack(anchor=tk.W, pady=8)
 
     def _build_canvas(self, parent: ttk.Frame) -> None:
         self.canvas = tk.Canvas(parent, background="#161616", highlightthickness=0, cursor="crosshair")
@@ -228,52 +273,122 @@ class FiberQuickApp(tk.Tk):
         self.canvas.bind("<Button-5>", lambda event: self._zoom_at(event.x, event.y, 1 / 1.2))
 
     def _build_right_panel(self, parent: ttk.Frame) -> None:
-        notebook = ttk.Notebook(parent)
-        notebook.pack(fill=tk.BOTH, expand=True)
+        self.notebook = ttk.Notebook(parent)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        measurement_tab = ttk.Frame(notebook, padding=4)
-        stats_tab = ttk.Frame(notebook, padding=6)
-        metadata_tab = ttk.Frame(notebook, padding=6)
-        notebook.add(measurement_tab, text="Mediciones")
-        notebook.add(stats_tab, text="Estadística")
-        notebook.add(metadata_tab, text="Metadata")
+        fibers_tab = ttk.Frame(self.notebook, padding=4)
+        measurements_tab = ttk.Frame(self.notebook, padding=4)
+        histogram_tab = ttk.Frame(self.notebook, padding=4)
+        inspector_tab = ttk.Frame(self.notebook, padding=6)
+        metadata_tab = ttk.Frame(self.notebook, padding=6)
 
+        self.notebook.add(fibers_tab, text="Fibras")
+        self.notebook.add(measurements_tab, text="Mediciones")
+        self.notebook.add(histogram_tab, text="Histograma")
+        self.notebook.add(inspector_tab, text="Inspector")
+        self.notebook.add(metadata_tab, text="Metadata")
+
+        # Tab 1: Fibers Tree
+        fiber_cols = ("id", "sections", "median", "min", "max", "status", "group")
+        self.fiber_tree = ttk.Treeview(fibers_tab, columns=fiber_cols, show="headings", height=28)
+        fiber_headers = {"id": "ID Fibra", "sections": "Secciones", "median": "Mediana", "min": "Mín.", "max": "Máx.", "status": "Estado", "group": "Grupo"}
+        fiber_widths = {"id": 75, "sections": 70, "median": 90, "min": 85, "max": 85, "status": 95, "group": 55}
+        for col in fiber_cols:
+            self.fiber_tree.heading(col, text=fiber_headers[col])
+            self.fiber_tree.column(col, width=fiber_widths[col], anchor=tk.CENTER)
+        f_scroll = ttk.Scrollbar(fibers_tab, orient=tk.VERTICAL, command=self.fiber_tree.yview)
+        self.fiber_tree.configure(yscrollcommand=f_scroll.set)
+        self.fiber_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        f_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.fiber_tree.bind("<<TreeviewSelect>>", self._on_fiber_tree_select)
+
+        # Tab 2: Measurements Tree
         columns = ("id", "fiber", "width", "method", "group", "defect", "ok")
-        self.tree = ttk.Treeview(measurement_tab, columns=columns, show="headings", height=28)
-        labels = {
-            "id": "ID",
-            "fiber": "Fibra",
-            "width": "Ancho proyectado",
-            "method": "Método",
-            "group": "Grupo",
-            "defect": "Defecto",
-            "ok": "OK",
-        }
-        widths = {"id": 62, "fiber": 65, "width": 105, "method": 94, "group": 52, "defect": 88, "ok": 35}
+        self.tree = ttk.Treeview(measurements_tab, columns=columns, show="headings", height=28)
+        labels = {"id": "ID", "fiber": "Fibra", "width": "Ancho proyectado", "method": "Método", "group": "Grupo", "defect": "Defecto", "ok": "OK"}
+        widths = {"id": 60, "fiber": 60, "width": 105, "method": 90, "group": 50, "defect": 85, "ok": 35}
         for column in columns:
             self.tree.heading(column, text=labels[column])
             self.tree.column(column, width=widths[column], anchor=tk.CENTER, stretch=column in {"method", "defect"})
-        scroll = ttk.Scrollbar(measurement_tab, orient=tk.VERTICAL, command=self.tree.yview)
+        scroll = ttk.Scrollbar(measurements_tab, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.bind("<<TreeviewSelect>>", self._tree_selection)
-        self.tree.bind("<Double-1>", lambda _event: self.tool_var.set("select"))
+        self.tree.bind("<Double-1>", self._on_tree_double_click)
 
-        self.stats_text = tk.Text(stats_tab, width=44, height=40, wrap=tk.WORD, state=tk.DISABLED)
-        self.stats_text.pack(fill=tk.BOTH, expand=True)
+        # Tab 3: Interactive Histogram
+        self._build_histogram_tab(histogram_tab)
+
+        # Tab 4: Inspector
+        self.inspector_text = tk.Text(inspector_tab, width=44, height=40, wrap=tk.WORD, state=tk.DISABLED)
+        self.inspector_text.pack(fill=tk.BOTH, expand=True)
+
+        # Tab 5: Metadata
         self.metadata_text = tk.Text(metadata_tab, width=44, height=40, wrap=tk.NONE, state=tk.DISABLED)
         self.metadata_text.pack(fill=tk.BOTH, expand=True)
+
+    def _build_histogram_tab(self, parent: ttk.Frame) -> None:
+        ctrls = ttk.Frame(parent, padding=4)
+        ctrls.pack(fill=tk.X)
+
+        ttk.Label(ctrls, text="Modo:").pack(side=tk.LEFT, padx=(0, 4))
+        r1 = ttk.Radiobutton(ctrls, text="Por fibra", variable=self.hist_mode_var, value="fiber", command=self._refresh_histogram)
+        r2 = ttk.Radiobutton(ctrls, text="Por sección", variable=self.hist_mode_var, value="section", command=self._refresh_histogram)
+        r1.pack(side=tk.LEFT, padx=2)
+        r2.pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(ctrls, text=" Bins:").pack(side=tk.LEFT, padx=(8, 2))
+        spin = ttk.Spinbox(ctrls, from_=5, to=30, increment=1, textvariable=self.hist_bins_var, width=5, command=self._refresh_histogram)
+        spin.pack(side=tk.LEFT, padx=2)
+
+        btn_clear = ttk.Button(ctrls, text="Limpiar filtro", command=self.clear_histogram_filter)
+        btn_clear.pack(side=tk.RIGHT, padx=4)
+
+        self.hist_info_lbl = ttk.Label(parent, text="N = 0", font=("TkDefaultFont", 9, "bold"))
+        self.hist_info_lbl.pack(anchor=tk.W, padx=6, pady=2)
+
+        self.hist_canvas = tk.Canvas(parent, background="#222222", height=320, highlightthickness=0)
+        self.hist_canvas.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self.hist_canvas.bind("<ButtonPress-1>", self._on_histogram_click)
 
     def _bind_shortcuts(self) -> None:
         self.bind_all("<Control-o>", lambda _event: self.open_image_dialog())
         self.bind_all("<Control-s>", lambda _event: self.save_project_dialog())
-        self.bind_all("<Key-v>", lambda _event: self.tool_var.set("select"))
-        self.bind_all("<Key-m>", lambda _event: self.tool_var.set("manual"))
-        self.bind_all("<Key-s>", lambda _event: self.tool_var.set("snap"))
-        self.bind_all("<Key-a>", lambda _event: self.tool_var.set("auto"))
+        self.bind_all("<Control-e>", lambda _event: self.export_annotated_dialog())
+        self.bind_all("<Key-v>", lambda event: self._shortcut_guard(event, lambda: self.tool_var.set("select")))
+        self.bind_all("<Key-m>", lambda event: self._shortcut_guard(event, lambda: self.tool_var.set("manual")))
+        self.bind_all("<Key-s>", lambda event: self._shortcut_guard(event, lambda: self.tool_var.set("snap")))
+        self.bind_all("<Key-a>", lambda event: self._shortcut_guard(event, lambda: self.tool_var.set("auto")))
+        self.bind_all("<Key-n>", lambda event: self._shortcut_guard(event, self.new_fiber))
+        self.bind_all("<Prior>", lambda _event: self.prev_fiber())
+        self.bind_all("<Next>", lambda _event: self.next_fiber())
+        self.bind_all("<Return>", lambda event: self._shortcut_guard(event, self._on_enter_pressed))
+        self.bind_all("<Key-r>", lambda event: self._shortcut_guard(event, self.toggle_selected_acceptance))
         self.bind_all("<Delete>", lambda _event: self.delete_selected())
+        self.bind_all("<Key-f>", lambda event: self._shortcut_guard(event, self.fit_image))
+        self.bind_all("<Key-c>", lambda event: self._shortcut_guard(event, self.center_selection))
         self.bind_all("<Escape>", lambda _event: self._clear_pending())
+
+    def _shortcut_guard(self, event: tk.Event[Any], action: Any) -> None:
+        widget = self.focus_get()
+        if isinstance(widget, (tk.Entry, ttk.Entry, tk.Text, ttk.Spinbox, ttk.Combobox)):
+            return
+        action()
+
+    def _on_target_sections_changed(self, _event: tk.Event[Any]) -> None:
+        val = self.target_sections_var.get()
+        if "3" in val:
+            target = 3
+        elif "5" in val:
+            target = 5
+        else:
+            target = 0
+        if self.project:
+            self.project.target_sections = target
+            self._mark_dirty()
+        self._update_protocol_display()
+        self._refresh_all()
 
     # ---------- loading and saving ----------
 
@@ -309,7 +424,9 @@ class FiberQuickApp(tk.Tk):
             self.source_image = source_image
             self.gray = gray
             self.selected_measurement_id = None
+            self.active_fiber_id = "F001"
             self.pending_point = None
+            self.histogram_filter = None
             self._has_fit = False
             self._clear_dirty()
             self.calibration_var.set(
@@ -394,7 +511,17 @@ class FiberQuickApp(tk.Tk):
             self.source_image = source_image
             self.gray = gray
             self.selected_measurement_id = None
+            self.active_fiber_id = project.active_fiber_id or "F001"
+            self.histogram_filter = None
             self._has_fit = False
+
+            if project.target_sections == 3:
+                self.target_sections_var.set("3 secciones")
+            elif project.target_sections == 5:
+                self.target_sections_var.set("5 secciones")
+            else:
+                self.target_sections_var.set("Libre (0)")
+
             self._clear_dirty()
             self.calibration_var.set(
                 f"{project.image.calibration.pixel_size_x_m * 1e9:.4f} nm/px\n"
@@ -419,6 +546,7 @@ class FiberQuickApp(tk.Tk):
         )
         if path:
             try:
+                self.project.active_fiber_id = self.active_fiber_id
                 saved = save_project(self.project, path)
                 self._clear_dirty()
                 self.status_var.set(f"Proyecto guardado: {saved}")
@@ -440,7 +568,16 @@ class FiberQuickApp(tk.Tk):
             return
         path = filedialog.asksaveasfilename(defaultextension=".png", initialfile="fibers_annotated.png")
         if path:
-            export_annotated(self.project, self.source_image, path)
+            export_annotated(
+                self.project,
+                self.source_image,
+                path,
+                show_ids=True,
+                show_values=True,
+                show_extrema=True,
+                show_defects=True,
+                show_legend=True,
+            )
             self.status_var.set(f"Imagen anotada exportada: {path}")
 
     def export_report_dialog(self) -> None:
@@ -451,11 +588,20 @@ class FiberQuickApp(tk.Tk):
             return
         report_path = Path(path)
         annotated_path = report_path.with_name(report_path.stem + "_annotated.png")
-        export_annotated(self.project, self.source_image, annotated_path)
+        export_annotated(
+            self.project,
+            self.source_image,
+            annotated_path,
+            show_ids=True,
+            show_values=True,
+            show_extrema=True,
+            show_defects=True,
+            show_legend=True,
+        )
         export_html_report(self.project, annotated_path.name, report_path)
         self.status_var.set(f"Informe exportado: {report_path}")
 
-    # ---------- transforms and rendering ----------
+    # ---------- transforms, zoom & rendering ----------
 
     def _on_canvas_configure(self, _event: tk.Event[Any]) -> None:
         if self.source_image is not None:
@@ -476,6 +622,29 @@ class FiberQuickApp(tk.Tk):
         self.offset_y = (ch - height * self.scale) / 2
         self._has_fit = True
         self.render()
+
+    def center_selection(self) -> None:
+        if self.source_image is None or self.project is None:
+            return
+        target_center: tuple[float, float] | None = None
+        if self.selected_measurement_id:
+            m = self._selected_measurement()
+            if m:
+                target_center = m.center
+        elif self.active_fiber_id:
+            acts = self.project.accepted_fiber_measurements(self.active_fiber_id)
+            if acts:
+                target_center = (
+                    float(np.mean([m.center[0] for m in acts])),
+                    float(np.mean([m.center[1] for m in acts])),
+                )
+
+        if target_center:
+            cw = max(self.canvas.winfo_width(), 10)
+            ch = max(self.canvas.winfo_height(), 10)
+            self.offset_x = cw / 2 - target_center[0] * self.scale
+            self.offset_y = ch / 2 - target_center[1] * self.scale
+            self.render()
 
     def image_to_canvas(self, point: tuple[float, float]) -> tuple[float, float]:
         return self.offset_x + point[0] * self.scale, self.offset_y + point[1] * self.scale
@@ -499,6 +668,7 @@ class FiberQuickApp(tk.Tk):
         if self.source_image is None or self.project is None:
             self.canvas.create_text(30, 30, anchor=tk.NW, fill="#ddd", text="Abre un TIFF Zeiss para comenzar.", font=("TkDefaultFont", 16))
             return
+
         cw = max(self.canvas.winfo_width(), 1)
         ch = max(self.canvas.winfo_height(), 1)
         width, height = self.source_image.size
@@ -530,52 +700,95 @@ class FiberQuickApp(tk.Tk):
     def _draw_measurements(self) -> None:
         if self.project is None:
             return
-        selected = self._selected_measurement()
-        selected_fiber = selected.fiber_id if selected else None
-        extrema: dict[str, list[str]] = {}
-        if selected_fiber:
-            fiber_measurements = [m for m in self.project.measurements if m.fiber_id == selected_fiber and m.accepted]
-            if fiber_measurements:
-                ordered = sorted(fiber_measurements, key=lambda item: item.width_m)
-                median_value = float(np.median([item.width_m for item in ordered]))
-                median_item = min(ordered, key=lambda item: abs(item.width_m - median_value))
-                for item, label in ((ordered[0], "MIN"), (median_item, "MED"), (ordered[-1], "MAX")):
-                    extrema.setdefault(item.measurement_id, []).append(label)
+
+        extrema_by_m = get_fiber_extrema(self.project.measurements, self.active_fiber_id)
+        show_all = self.show_all_sections_var.get()
+
+        # Histogram filter items set
+        filter_items = set(self.histogram_filter[2]) if self.histogram_filter else None
+        filter_mode = self.histogram_filter[0] if self.histogram_filter else None
 
         for measurement in self.project.measurements:
+            is_active_fiber = measurement.fiber_id == self.active_fiber_id
+            is_selected = measurement.measurement_id == self.selected_measurement_id
+
+            if not show_all and not is_active_fiber:
+                continue
+
+            # Filtering dimming check
+            if filter_items is not None:
+                if filter_mode == "fiber" and measurement.fiber_id not in filter_items:
+                    continue
+                if filter_mode == "section" and measurement.measurement_id not in filter_items:
+                    continue
+
             p1c = self.image_to_canvas(measurement.p1)
             p2c = self.image_to_canvas(measurement.p2)
-            if measurement.measurement_id == self.selected_measurement_id:
-                color = self.SELECTED
-                width = 4
-            elif not measurement.accepted:
-                color = "#888888"
-                width = 2
-            elif measurement.group is not None:
-                color = self.GROUP_HEX[measurement.group % len(self.GROUP_HEX)]
-                width = 3
-            else:
-                color = "#00D7FF"
-                width = 3
-            self.canvas.create_line(*p1c, *p2c, fill=color, width=width)
-            radius = 5 if measurement.measurement_id == self.selected_measurement_id else 3
-            for point in (p1c, p2c):
-                self.canvas.create_oval(point[0]-radius, point[1]-radius, point[0]+radius, point[1]+radius, fill=color, outline="white")
-            center = self.image_to_canvas(measurement.center)
-            if measurement.measurement_id == self.selected_measurement_id or self.scale > 0.5:
-                self.canvas.create_text(
-                    center[0] + 7,
-                    center[1] + 7,
-                    text=f"{measurement.fiber_id} {measurement.width_m * 1e6:.3f} µm",
-                    anchor=tk.NW,
-                    fill="#fff6a8",
-                    font=("TkDefaultFont", 9, "bold"),
-                )
-            if measurement.measurement_id in extrema:
-                label = "/".join(extrema[measurement.measurement_id])
-                self.canvas.create_text(center[0], center[1]-12, text=label, fill="#FFFFFF", font=("TkDefaultFont", 9, "bold"))
 
-    # ---------- canvas interactions ----------
+            if is_selected:
+                color = self.SELECTED
+                width = 5
+                dash = None
+            elif not measurement.accepted:
+                color = "#666666"
+                width = 2
+                dash = (4, 4)
+            elif is_active_fiber:
+                color = self.GROUP_HEX[(measurement.group or 0) % len(self.GROUP_HEX)]
+                width = 3
+                dash = None
+            else:
+                color = "#005a8d" if show_all else "#333333"
+                width = 2
+                dash = None
+
+            self.canvas.create_line(*p1c, *p2c, fill=color, width=width, dash=dash)
+            radius = 6 if is_selected else 3
+            for point in (p1c, p2c):
+                self.canvas.create_oval(
+                    point[0] - radius,
+                    point[1] - radius,
+                    point[0] + radius,
+                    point[1] + radius,
+                    fill=color,
+                    outline="white",
+                )
+
+            center = self.image_to_canvas(measurement.center)
+
+            # Labels for selected measurement or active fiber
+            if is_selected or (is_active_fiber and self.scale > 0.4):
+                method_icon = " [A]" if "ASSISTED" in measurement.method else ""
+                label_txt = f"{measurement.fiber_id}: {measurement.width_m * 1e6:.3f} µm{method_icon}"
+                self.canvas.create_text(
+                    center[0] + 8,
+                    center[1] + 8,
+                    text=label_txt,
+                    anchor=tk.NW,
+                    fill="#fff6a8" if is_selected else "#ffffff",
+                    font=("TkDefaultFont", 9, "bold" if is_selected else "normal"),
+                )
+
+            # MIN, MED, MAX Extrema badges for active fiber
+            if is_active_fiber and measurement.measurement_id in extrema_by_m:
+                labels = "/".join(extrema_by_m[measurement.measurement_id])
+                self.canvas.create_rectangle(
+                    center[0] - 18,
+                    center[1] - 18,
+                    center[0] + 18,
+                    center[1] - 4,
+                    fill="#0072B2",
+                    outline="#ffffff",
+                )
+                self.canvas.create_text(
+                    center[0],
+                    center[1] - 11,
+                    text=labels,
+                    fill="#FFFFFF",
+                    font=("TkDefaultFont", 8, "bold"),
+                )
+
+    # ---------- canvas interactions & hit test ----------
 
     def _wheel_zoom(self, event: tk.Event[Any]) -> None:
         factor = 1.2 if event.delta > 0 else 1 / 1.2
@@ -585,7 +798,7 @@ class FiberQuickApp(tk.Tk):
         if self.source_image is None:
             return
         image_point = self.canvas_to_image((x, y))
-        self.scale = max(0.03, min(12.0, self.scale * factor))
+        self.scale = max(0.03, min(15.0, self.scale * factor))
         self.offset_x = x - image_point[0] * self.scale
         self.offset_y = y - image_point[1] * self.scale
         self.render()
@@ -611,24 +824,29 @@ class FiberQuickApp(tk.Tk):
         point = self.canvas_to_image((event.x, event.y))
         if not self._inside_image(point):
             return
+
         tool = self.tool_var.get()
         if tool == "select":
             measurement, endpoint = self._hit_test(event.x, event.y)
             if measurement:
                 self.select_measurement(measurement.measurement_id)
+                self.select_fiber(measurement.fiber_id)
                 if endpoint is not None:
                     self.drag_endpoint = endpoint
                     self.dragging_measurement_id = measurement.measurement_id
             else:
                 self.select_measurement(None)
             return
+
         if self._inside_footer(point):
             self.status_var.set("La zona del footer está excluida. Elige una región de micrografía.")
             self.bell()
             return
+
         if tool == "auto":
             self._create_one_click(point)
             return
+
         if tool in {"manual", "snap"}:
             if self.pending_point is None:
                 self.pending_point = point
@@ -654,7 +872,9 @@ class FiberQuickApp(tk.Tk):
             measurement.p1 = point
         else:
             measurement.p2 = point
+
         measurement.width_m = self.project.image.calibration.distance_m(measurement.p1, measurement.p2)
+        self._refresh_inspector()
         self.render()
 
     def _on_left_release(self, _event: tk.Event[Any]) -> None:
@@ -719,7 +939,7 @@ class FiberQuickApp(tk.Tk):
         width_m = self.project.image.calibration.distance_m(p1, p2)
         measurement = Measurement(
             measurement_id=self.project.next_measurement_id(),
-            fiber_id=self.fiber_var.get().strip() or "F001",
+            fiber_id=self.active_fiber_id,
             p1=p1,
             p2=p2,
             width_m=width_m,
@@ -729,42 +949,65 @@ class FiberQuickApp(tk.Tk):
         self.project.measurements.append(measurement)
         self.select_measurement(measurement.measurement_id)
         self._mark_dirty()
-        self._refresh_all()
-        self.status_var.set(f"{measurement.measurement_id}: {format_length_m(width_m)}")
+
+        # Check protocol auto-advance
+        if self.project.is_fiber_complete(self.active_fiber_id) and self.auto_advance_var.get():
+            self.status_var.set(f"¡Protocolo de {self.active_fiber_id} completado! Avanzando automáticamente.")
+            self.next_fiber()
+        else:
+            self._refresh_all()
+            self.status_var.set(f"{measurement.measurement_id}: {format_length_m(width_m)}")
 
     def _hit_test(self, canvas_x: float, canvas_y: float) -> tuple[Measurement | None, int | None]:
         if self.project is None:
             return None, None
-        threshold = 9.0
+        endpoint_threshold = 12.0
+        line_threshold = 9.0
         best: tuple[float, Measurement, int | None] | None = None
+
         for measurement in self.project.measurements:
             p1 = np.asarray(self.image_to_canvas(measurement.p1))
             p2 = np.asarray(self.image_to_canvas(measurement.p2))
             point = np.asarray((canvas_x, canvas_y))
             d1 = float(np.linalg.norm(point - p1))
             d2 = float(np.linalg.norm(point - p2))
+
+            # Bonus priority for active fiber
+            priority_penalty = 0.0 if measurement.fiber_id == self.active_fiber_id else 5.0
+
             for distance, endpoint in ((d1, 0), (d2, 1)):
-                if distance <= threshold and (best is None or distance < best[0]):
-                    best = (distance, measurement, endpoint)
+                adj_dist = distance + priority_penalty
+                if distance <= endpoint_threshold and (best is None or adj_dist < best[0]):
+                    best = (adj_dist, measurement, endpoint)
+
             segment = p2 - p1
             denom = float(np.dot(segment, segment))
             if denom > 0:
                 t = max(0.0, min(1.0, float(np.dot(point - p1, segment) / denom)))
                 projection = p1 + t * segment
                 line_distance = float(np.linalg.norm(point - projection))
-                if line_distance <= threshold and (best is None or line_distance < best[0]):
-                    best = (line_distance, measurement, None)
+                adj_line_dist = line_distance + priority_penalty
+                if line_distance <= line_threshold and (best is None or adj_line_dist < best[0]):
+                    best = (adj_line_dist, measurement, None)
+
         return (best[1], best[2]) if best else (None, None)
 
-    # ---------- measurements and statistics ----------
+    # ---------- Protocol & Linked Selection ----------
 
-    def _measurement_by_id(self, measurement_id: str | None) -> Measurement | None:
-        if self.project is None or measurement_id is None:
-            return None
-        return next((m for m in self.project.measurements if m.measurement_id == measurement_id), None)
+    def select_fiber(self, fiber_id: str) -> None:
+        self.active_fiber_id = fiber_id
+        if self.project:
+            self.project.active_fiber_id = fiber_id
+        self.lbl_active_fiber.configure(text=fiber_id)
+        self._update_protocol_display()
 
-    def _selected_measurement(self) -> Measurement | None:
-        return self._measurement_by_id(self.selected_measurement_id)
+        # Select in fiber tree
+        if self.fiber_tree.exists(fiber_id):
+            self.fiber_tree.selection_set(fiber_id)
+            self.fiber_tree.see(fiber_id)
+
+        self._refresh_inspector()
+        self.render()
 
     def select_measurement(self, measurement_id: str | None) -> None:
         self.selected_measurement_id = measurement_id
@@ -773,51 +1016,68 @@ class FiberQuickApp(tk.Tk):
             self.tree.see(measurement_id)
         measurement = self._selected_measurement()
         if measurement:
-            self.fiber_var.set(measurement.fiber_id)
+            self.select_fiber(measurement.fiber_id)
             self.defect_var.set(measurement.defect)
-            confidence = "—" if measurement.confidence is None else f"{measurement.confidence:.2f}"
-            self.selected_info_var.set(
-                f"{measurement.measurement_id} · {measurement.fiber_id}\n"
-                f"{format_length_m(measurement.width_m)}\n"
-                f"{measurement.method}\nConfianza: {confidence}"
-            )
-        else:
-            self.selected_info_var.set("Sin selección")
+        self._refresh_inspector()
         self.render()
 
     def _tree_selection(self, _event: tk.Event[Any]) -> None:
         selected = self.tree.selection()
         if selected:
-            self.selected_measurement_id = selected[0]
-            measurement = self._selected_measurement()
-            if measurement:
-                self.fiber_var.set(measurement.fiber_id)
-                self.defect_var.set(measurement.defect)
-            self.render()
-            self._update_selected_info()
+            self.select_measurement(selected[0])
 
-    def _update_selected_info(self) -> None:
-        measurement = self._selected_measurement()
-        if not measurement:
-            self.selected_info_var.set("Sin selección")
-            return
-        confidence = "—" if measurement.confidence is None else f"{measurement.confidence:.2f}"
-        self.selected_info_var.set(
-            f"{measurement.measurement_id} · {measurement.fiber_id}\n"
-            f"{format_length_m(measurement.width_m)}\n{measurement.method}\n"
-            f"Grupo: {measurement.group if measurement.group is not None else '—'} · Confianza: {confidence}"
-        )
+    def _on_tree_double_click(self, _event: tk.Event[Any]) -> None:
+        self.tool_var.set("select")
+        self.center_selection()
+
+    def _on_fiber_tree_select(self, _event: tk.Event[Any]) -> None:
+        selected = self.fiber_tree.selection()
+        if selected:
+            self.select_fiber(selected[0])
 
     def new_fiber(self) -> None:
         if self.project is None:
-            self.fiber_var.set("F001")
+            new_id = "F001"
+        else:
+            new_id = self.project.get_next_fiber_id()
+            self._mark_dirty()
+        self.select_fiber(new_id)
+        self.status_var.set(f"Nueva fibra activa: {new_id}")
+
+    def prev_fiber(self) -> None:
+        if self.project is None:
             return
-        numbers = []
-        for measurement in self.project.measurements:
-            if measurement.fiber_id.startswith("F") and measurement.fiber_id[1:].isdigit():
-                numbers.append(int(measurement.fiber_id[1:]))
-        self.fiber_var.set(f"F{(max(numbers, default=0) + 1):03d}")
-        self.status_var.set(f"Nueva fibra actual: {self.fiber_var.get()}")
+        fibers = sorted({m.fiber_id for m in self.project.measurements} | {self.active_fiber_id})
+        if self.active_fiber_id in fibers:
+            idx = fibers.index(self.active_fiber_id)
+            prev_id = fibers[max(0, idx - 1)]
+            self.select_fiber(prev_id)
+
+    def next_fiber(self) -> None:
+        if self.project is None:
+            return
+        fibers = sorted({m.fiber_id for m in self.project.measurements} | {self.active_fiber_id})
+        if self.active_fiber_id in fibers:
+            idx = fibers.index(self.active_fiber_id)
+            if idx + 1 < len(fibers):
+                next_id = fibers[idx + 1]
+            else:
+                next_id = self.project.get_next_fiber_id()
+                self._mark_dirty()
+            self.select_fiber(next_id)
+
+    def _update_protocol_display(self) -> None:
+        if self.project is None:
+            self.protocol_status_var.set("Protocolo: 0 / 5 (Incompleto)")
+            return
+        target = self.project.target_sections
+        accepted = len(self.project.accepted_fiber_measurements(self.active_fiber_id))
+        target_str = "∞" if target <= 0 else str(target)
+
+        if self.project.is_fiber_complete(self.active_fiber_id):
+            self.protocol_status_var.set(f"Protocolo: {accepted} / {target_str} (✓ Completo)")
+        else:
+            self.protocol_status_var.set(f"Protocolo: {accepted} / {target_str} (Incompleto)")
 
     def apply_defect(self) -> None:
         measurement = self._selected_measurement()
@@ -844,22 +1104,192 @@ class FiberQuickApp(tk.Tk):
         self._mark_dirty()
         self._refresh_all()
 
+    def _on_enter_pressed(self) -> None:
+        measurement = self._selected_measurement()
+        if measurement and not measurement.accepted:
+            measurement.accepted = True
+            self._mark_dirty()
+            self._refresh_all()
+
     def classify(self) -> None:
         if self.project is None or not self.project.measurements:
             return
-        requested = None if self.classification_var.get() == "Auto" else int(self.classification_var.get())
-        mapping = classify_fibers(self.project.measurements, requested_k=requested)
+        mode = self.classification_var.get()
+        if mode == "Auto":
+            mapping = classify_fibers(self.project.measurements)
+        else:
+            k = int(mode)
+            mapping = classify_fibers(self.project.measurements, requested_k=k)
+
         groups = len(set(mapping.values())) if mapping else 0
         self._mark_dirty()
         self._refresh_all()
-        self.status_var.set(f"Clasificación aplicada: {groups} grupo(s), usando la mediana por fibra.")
+        self.status_var.set(f"Clasificación aplicada: {groups} grupo(s) compatibles con la distribución.")
+
+    # ---------- Interactive Histogram ----------
+
+    def _refresh_histogram(self) -> None:
+        if self.project is None:
+            self.hist_canvas.delete("all")
+            self.hist_info_lbl.configure(text="N = 0")
+            return
+
+        mode = self.hist_mode_var.get()
+        n_bins = self.hist_bins_var.get()
+        hist_data = compute_histogram_data(self.project.measurements, mode=mode, n_bins=n_bins)
+
+        self.hist_canvas.delete("all")
+        counts = hist_data["counts"]
+        edges = hist_data["bin_edges"]
+        vals = hist_data["values"]
+
+        if vals.size == 0:
+            self.hist_info_lbl.configure(text="N = 0 (Sin datos suficientes)")
+            return
+
+        self.hist_info_lbl.configure(
+            text=f"N = {vals.size} | Media: {format_length_m(hist_data['mean_m'])} | Mediana: {format_length_m(hist_data['median_m'])}"
+        )
+
+        w = max(self.hist_canvas.winfo_width(), 300)
+        h = max(self.hist_canvas.winfo_height(), 200)
+
+        padding_x = 40
+        padding_y = 30
+        plot_w = w - 2 * padding_x
+        plot_h = h - 2 * padding_y
+
+        max_count = max(counts) if counts.size > 0 else 1
+        n = len(counts)
+        bar_w = plot_w / max(1, n)
+
+        # Store bin boxes for click hit-testing
+        self._hist_bin_boxes = []
+
+        for i in range(n):
+            c = counts[i]
+            bar_h = (c / max_count) * plot_h
+            x0 = padding_x + i * bar_w
+            y0 = h - padding_y - bar_h
+            x1 = x0 + bar_w - 2
+            y1 = h - padding_y
+
+            is_filtered_bin = (
+                self.histogram_filter is not None
+                and self.histogram_filter[0] == mode
+                and self.histogram_filter[1] == i
+            )
+            color = "#FFBF00" if is_filtered_bin else "#0072B2"
+
+            self.hist_canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline="#ffffff")
+            if c > 0:
+                self.hist_canvas.create_text((x0 + x1) / 2, y0 - 8, text=str(c), fill="#ffffff", font=("TkDefaultFont", 8))
+
+            self._hist_bin_boxes.append((x0, y0, x1, y1, i, edges[i], edges[i + 1]))
+
+        # Mean and Median lines
+        mean_val = hist_data["mean_m"]
+        med_val = hist_data["median_m"]
+        min_e, max_e = edges[0], edges[-1]
+        span = max_e - min_e if max_e > min_e else 1.0
+
+        if mean_val is not None:
+            x_mean = padding_x + ((mean_val - min_e) / span) * plot_w
+            self.hist_canvas.create_line(x_mean, padding_y, x_mean, h - padding_y, fill="#E69F00", width=2, dash=(4, 2))
+            self.hist_canvas.create_text(x_mean, padding_y - 10, text="Media", fill="#E69F00", font=("TkDefaultFont", 8, "bold"))
+
+        if med_val is not None:
+            x_med = padding_x + ((med_val - min_e) / span) * plot_w
+            self.hist_canvas.create_line(x_med, padding_y, x_med, h - padding_y, fill="#009E73", width=2)
+            self.hist_canvas.create_text(x_med, padding_y - 20, text="Mediana", fill="#009E73", font=("TkDefaultFont", 8, "bold"))
+
+    def _on_histogram_click(self, event: tk.Event[Any]) -> None:
+        if not hasattr(self, "_hist_bin_boxes") or not self.project:
+            return
+        cx, _cy = event.x, event.y
+        mode = self.hist_mode_var.get()
+        n_bins = self.hist_bins_var.get()
+        hist_data = compute_histogram_data(self.project.measurements, mode=mode, n_bins=n_bins)
+
+        for x0, y0, x1, y1, bin_idx, e0, e1 in self._hist_bin_boxes:
+            if x0 <= cx <= x1:
+                # Find matching items in bin range
+                matching_ids = []
+                for item_id, val in hist_data["items"]:
+                    if e0 <= val <= e1:
+                        matching_ids.append(item_id)
+                self.histogram_filter = (mode, bin_idx, matching_ids)
+                self._refresh_histogram()
+                self.render()
+                self.status_var.set(
+                    f"Filtro aplicado en histograma ({mode}): {len(matching_ids)} elementos en rango {format_length_m(e0)} - {format_length_m(e1)}"
+                )
+                return
+
+    def clear_histogram_filter(self) -> None:
+        self.histogram_filter = None
+        self._refresh_histogram()
+        self.render()
+        self.status_var.set("Filtro de histograma limpiado.")
+
+    # ---------- refreshes ----------
 
     def _refresh_all(self) -> None:
+        self._update_protocol_display()
+        self._refresh_fiber_tree()
         self._refresh_tree()
-        self._refresh_stats()
+        self._refresh_inspector()
+        self._refresh_histogram()
         self._refresh_metadata()
-        self._update_selected_info()
         self.render()
+
+    def _refresh_fiber_tree(self) -> None:
+        for item in self.fiber_tree.get_children():
+            self.fiber_tree.delete(item)
+        if self.project is None:
+            return
+
+        fibers_stats = fiber_statistics(self.project.measurements)
+        all_fiber_ids = sorted({m.fiber_id for m in self.project.measurements} | {self.active_fiber_id})
+
+        for fid in all_fiber_ids:
+            tot = len(self.project.fiber_measurements(fid))
+            accepted = len(self.project.accepted_fiber_measurements(fid))
+            info = fibers_stats.get(fid)
+
+            if info and accepted > 0:
+                med_str = f"{info['median_m'] * 1e6:.3f} µm"
+                min_str = f"{info['min_m'] * 1e6:.3f} µm"
+                max_str = f"{info['max_m'] * 1e6:.3f} µm"
+            else:
+                med_str = "—"
+                min_str = "—"
+                max_str = "—"
+
+            status = "✓ Completo" if self.project.is_fiber_complete(fid) else "Incompleto"
+            if accepted == 0:
+                status = "Sin datos"
+
+            groups = {m.group for m in self.project.fiber_measurements(fid) if m.group is not None}
+            grp_str = str(next(iter(groups)) + 1) if len(groups) == 1 else "—"
+
+            self.fiber_tree.insert(
+                "",
+                tk.END,
+                iid=fid,
+                values=(
+                    fid,
+                    f"{accepted}/{tot}",
+                    med_str,
+                    min_str,
+                    max_str,
+                    status,
+                    grp_str,
+                ),
+            )
+
+        if self.active_fiber_id and self.fiber_tree.exists(self.active_fiber_id):
+            self.fiber_tree.selection_set(self.active_fiber_id)
 
     def _refresh_tree(self) -> None:
         for item in self.tree.get_children():
@@ -885,58 +1315,51 @@ class FiberQuickApp(tk.Tk):
         if self.selected_measurement_id and self.tree.exists(self.selected_measurement_id):
             self.tree.selection_set(self.selected_measurement_id)
 
-    def _refresh_stats(self) -> None:
-        measurements = self.project.measurements if self.project else []
-        f_stats = fiber_level_summary(measurements)
-        s_stats = section_level_summary(measurements)
-        fibers = fiber_statistics(measurements)
+    def _refresh_inspector(self) -> None:
+        lines = []
+        fid = self.active_fiber_id
+        lines.append(f"INSPECTOR DE FIBRA — {fid}")
+        lines.append("=" * 35)
 
-        lines = ["RESUMEN POR FIBRA — medianas por fibra", ""]
-        lines.append(f"Fibras identificadas: {f_stats['n_fibers']}")
-        lines.append(f"Mediciones válidas totales: {f_stats['n_measurements']}")
-        for label, key in (
-            ("Media de medianas", "mean_m"),
-            ("Mediana global", "median_m"),
-            ("Mínimo crudo", "min_m"),
-            ("Máximo crudo", "max_m"),
-            ("Desv. estándar", "std_m"),
-            ("P05", "p05_m"),
-            ("P95", "p95_m"),
-        ):
-            val = f_stats[key]
-            lines.append(f"{label}: {'—' if val is None else format_length_m(float(val))}")
+        if self.project:
+            tot = len(self.project.fiber_measurements(fid))
+            accepted = len(self.project.accepted_fiber_measurements(fid))
+            rejected = tot - accepted
+            is_comp = self.project.is_fiber_complete(fid)
 
-        lines.extend(["", "DISTRIBUCIÓN DE SECCIONES LOCALES", ""])
-        lines.append(f"Secciones totales: {s_stats['n_measurements']}")
-        for label, key in (
-            ("Media por sección", "mean_m"),
-            ("Mediana por sección", "median_m"),
-            ("Mínimo crudo", "min_m"),
-            ("Máximo crudo", "max_m"),
-            ("Desv. estándar", "std_m"),
-            ("P05", "p05_m"),
-            ("P95", "p95_m"),
-        ):
-            val = s_stats[key]
-            lines.append(f"{label}: {'—' if val is None else format_length_m(float(val))}")
+            lines.append(f"Estado del Protocolo: {'✓ Protocolo completo' if is_comp else 'Protocolo incompleto'}")
+            lines.append(f"Secciones totales: {tot} (Aceptadas: {accepted}, Rechazadas: {rejected})")
 
-        lines.extend(["", "DETALLE POR FIBRA", ""])
-        for fiber_id, values in sorted(fibers.items()):
-            groups = {m.group for m in measurements if m.fiber_id == fiber_id and m.group is not None}
-            group_text = f" · grupo {next(iter(groups)) + 1}" if len(groups) == 1 else ""
-            lines.append(
-                f"{fiber_id}: N={values['n']} · mediana={format_length_m(float(values['median_m']))}"
-                f" · min={format_length_m(float(values['min_m']))} · max={format_length_m(float(values['max_m']))}{group_text}"
-            )
-        lines.extend([
-            "",
-            "INTERPRETACIÓN",
-            "La aplicación mide ancho proyectado en la micrografía 2D. El resumen principal se calcula sobre las medianas de cada fibra para evitar que fibras con más mediciones sesguen la distribución.",
-        ])
-        self.stats_text.configure(state=tk.NORMAL)
-        self.stats_text.delete("1.0", tk.END)
-        self.stats_text.insert("1.0", "\n".join(lines))
-        self.stats_text.configure(state=tk.DISABLED)
+            fib_stats = fiber_statistics(self.project.measurements).get(fid)
+            if fib_stats and accepted > 0:
+                lines.append(f"Media: {format_length_m(float(fib_stats['mean_m']))}")
+                lines.append(f"Mediana: {format_length_m(float(fib_stats['median_m']))}")
+                lines.append(f"Desviación estándar: {format_length_m(float(fib_stats['std_m']))}")
+                lines.append(f"Mínimo crudo: {format_length_m(float(fib_stats['min_m']))}")
+                lines.append(f"Máximo crudo: {format_length_m(float(fib_stats['max_m']))}")
+            else:
+                lines.append("Media: —\nMediana: —\nDesviación estándar: —\nMínimo crudo: —\nMáximo crudo: —")
+
+        lines.append("")
+        lines.append("MEDICIÓN SELECCIONADA")
+        lines.append("=" * 35)
+        m = self._selected_measurement()
+        if m:
+            confidence = "—" if m.confidence is None else f"{m.confidence:.2f}"
+            lines.append(f"ID: {m.measurement_id}")
+            lines.append(f"Ancho proyectado: {format_length_m(m.width_m)}")
+            lines.append(f"Método: {m.method}")
+            lines.append(f"Confianza: {confidence}")
+            lines.append(f"Grupo: {m.group + 1 if m.group is not None else '—'}")
+            lines.append(f"Defecto: {m.defect}")
+            lines.append(f"Aceptada: {'Sí' if m.accepted else 'No'}")
+        else:
+            lines.append("Ninguna medición seleccionada.")
+
+        self.inspector_text.configure(state=tk.NORMAL)
+        self.inspector_text.delete("1.0", tk.END)
+        self.inspector_text.insert("1.0", "\n".join(lines))
+        self.inspector_text.configure(state=tk.DISABLED)
 
     def _refresh_metadata(self) -> None:
         self.metadata_text.configure(state=tk.NORMAL)
@@ -960,28 +1383,39 @@ class FiberQuickApp(tk.Tk):
         self.dragging_measurement_id = None
         self.render()
 
+    def _selected_measurement(self) -> Measurement | None:
+        return self._measurement_by_id(self.selected_measurement_id)
+
+    def _measurement_by_id(self, measurement_id: str | None) -> Measurement | None:
+        if self.project is None or measurement_id is None:
+            return None
+        return next((m for m in self.project.measurements if m.measurement_id == measurement_id), None)
+
     # ---------- help ----------
 
     def show_protocol(self) -> None:
         messagebox.showinfo(
-            "Protocolo rápido",
-            "1. Abre el TIFF Zeiss y confirma la escala mostrada.\n"
-            "2. Crea una ID por fibra.\n"
-            "3. Mide siempre perpendicular al eje. Usa 3–5 secciones limpias por fibra.\n"
-            "4. Evita cruces, beads, bordes de imagen y zonas fusionadas; o márcalas como defecto.\n"
-            "5. Las herramientas asistidas entregan puntajes heurísticos locales, no probabilidades calibradas. Selecciónala con V y arrastra sus extremos.\n"
-            "6. Clasifica después de medir varias fibras y revisa cada grupo sobre la imagen.\n"
-            "7. Guarda el proyecto y exporta CSV + informe.",
+            "Protocolo de Medición de Fibras SEM",
+            "1. Selecciona o crea una ID de fibra (ej. F001).\n"
+            "2. Realiza 3 o 5 secciones perpendiculares por fibra.\n"
+            "3. Revisa el indicador de progreso del protocolo (ej. 5/5 Completo).\n"
+            "4. Utiliza la tabla de Fibras o el Inspector para revisar estadísticas inmediatas.\n"
+            "5. Usa los atajos de teclado para un flujo ultra-rápido:\n"
+            "   • N: Nueva fibra\n"
+            "   • PageUp / PageDown: Navegar entre fibras\n"
+            "   • M: Medición manual | S: Snap | A: Propuesta auto\n"
+            "   • R: Aceptar/Rechazar | Del: Eliminar\n"
+            "   • F: Ajustar imagen | C: Centrar selección",
             parent=self,
         )
 
     def show_about(self) -> None:
         messagebox.showinfo(
-            "Acerca de",
-            "Fathom Fibers Quick 0.1\n\n"
-            "MVP manual-first para ancho proyectado de fibras SEM.\n"
-            "Lee metadata CZ_SEM de TIFF Zeiss y conserva cada medición con coordenadas físicas.\n\n"
-            "Los puntajes de herramientas asistidas son heurísticos locales. No sustituyen la revisión científica de cruces, inclinación o regiones fusionadas.",
+            "Acerca de Fathom Fibers Quick",
+            "Fathom Fibers Quick 0.1 — Endurecido\n\n"
+            "Herramienta interactiva de medición manual y asistida de ancho proyectado para micrografías SEM.\n"
+            "Optimizado para metadatos Zeiss CZ_SEM con verificación de integridad SHA-256.\n\n"
+            "Los puntajes asistidos son heurísticos locales. La interpretación científica requiere supuestos geométricos explícitos.",
             parent=self,
         )
 

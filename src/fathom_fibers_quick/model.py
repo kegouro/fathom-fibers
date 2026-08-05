@@ -83,6 +83,12 @@ class Project:
     measurements: list[Measurement] = field(default_factory=list)
     project_path: str | None = None
     notes: str = ""
+    target_sections: int = 5
+    active_fiber_id: str = "F001"
+    next_fiber_counter: int = 1
+    fiber_notes: dict[str, str] = field(default_factory=dict)
+    group_names: dict[int, str] = field(default_factory=dict)
+    manual_ranges: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -100,12 +106,27 @@ class Project:
             item["p1"] = tuple(item["p1"])
             item["p2"] = tuple(item["p2"])
             measurements.append(Measurement(**item))
+
+        # Recover or compute next_fiber_counter
+        used_numbers = []
+        for m in measurements:
+            if m.fiber_id.startswith("F") and m.fiber_id[1:].isdigit():
+                used_numbers.append(int(m.fiber_id[1:]))
+        computed_next = max(used_numbers, default=0) + 1
+        stored_next = int(data.get("next_fiber_counter", computed_next))
+
         return cls(
             schema_version=int(data.get("schema_version", 1)),
             image=image,
             measurements=measurements,
             project_path=data.get("project_path"),
             notes=data.get("notes", ""),
+            target_sections=int(data.get("target_sections", 5)),
+            active_fiber_id=str(data.get("active_fiber_id", "F001")),
+            next_fiber_counter=max(stored_next, computed_next),
+            fiber_notes=dict(data.get("fiber_notes", {})),
+            group_names={int(k): str(v) for k, v in data.get("group_names", {}).items()},
+            manual_ranges=list(data.get("manual_ranges", [])),
         )
 
     def next_measurement_id(self) -> str:
@@ -114,6 +135,29 @@ class Project:
         while f"M{index:04d}" in used:
             index += 1
         return f"M{index:04d}"
+
+    def get_next_fiber_id(self) -> str:
+        used_numbers = []
+        for m in self.measurements:
+            if m.fiber_id.startswith("F") and m.fiber_id[1:].isdigit():
+                used_numbers.append(int(m.fiber_id[1:]))
+        highest = max(used_numbers, default=0)
+        self.next_fiber_counter = max(self.next_fiber_counter, highest + 1)
+        fiber_id = f"F{self.next_fiber_counter:03d}"
+        self.next_fiber_counter += 1
+        return fiber_id
+
+    def fiber_measurements(self, fiber_id: str) -> list[Measurement]:
+        return [m for m in self.measurements if m.fiber_id == fiber_id]
+
+    def accepted_fiber_measurements(self, fiber_id: str) -> list[Measurement]:
+        return [m for m in self.measurements if m.fiber_id == fiber_id and m.accepted]
+
+    def is_fiber_complete(self, fiber_id: str) -> bool:
+        accepted_count = len(self.accepted_fiber_measurements(fiber_id))
+        if self.target_sections <= 0:
+            return accepted_count > 0
+        return accepted_count >= self.target_sections
 
     def ensure_source_exists(self) -> Path:
         path = Path(self.image.path)

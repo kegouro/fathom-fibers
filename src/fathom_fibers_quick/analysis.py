@@ -4,6 +4,7 @@ import math
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from scipy.ndimage import gaussian_filter, gaussian_filter1d, map_coordinates, sobel
@@ -288,6 +289,33 @@ def fiber_statistics(measurements: Iterable[Measurement]) -> dict[str, dict[str,
     return output
 
 
+def get_fiber_extrema(measurements: Iterable[Measurement], fiber_id: str) -> dict[str, list[str]]:
+    """Returns mapping of measurement_id -> list of labels ('MIN', 'MED', 'MAX') for fiber_id."""
+    accepted = [m for m in measurements if m.fiber_id == fiber_id and m.accepted and math.isfinite(m.width_m) and m.width_m > 0]
+    if not accepted:
+        return {}
+
+    ordered = sorted(accepted, key=lambda m: m.width_m)
+    extrema: dict[str, list[str]] = {}
+
+    if len(ordered) == 1:
+        extrema[ordered[0].measurement_id] = ["MIN", "MED", "MAX"]
+        return extrema
+
+    if len(ordered) == 2:
+        extrema[ordered[0].measurement_id] = ["MIN"]
+        extrema[ordered[1].measurement_id] = ["MAX"]
+        return extrema
+
+    median_val = float(np.median([m.width_m for m in ordered]))
+    median_item = min(ordered, key=lambda m: abs(m.width_m - median_val))
+
+    for m_item, label in ((ordered[0], "MIN"), (median_item, "MED"), (ordered[-1], "MAX")):
+        extrema.setdefault(m_item.measurement_id, []).append(label)
+
+    return extrema
+
+
 def _kmeans_1d(values: np.ndarray, k: int, max_iter: int = 100) -> tuple[np.ndarray, np.ndarray, float]:
     if k == 1:
         centers = np.array([values.mean()])
@@ -345,3 +373,70 @@ def classify_fibers(
     for measurement in measurements:
         measurement.group = mapping.get(measurement.fiber_id)
     return mapping
+
+
+def classify_fibers_manual(
+    measurements: list[Measurement],
+    ranges: list[tuple[str, float, float]],
+) -> dict[str, int]:
+    """Classify fibers into manual ranges based on each fiber's accepted median width.
+
+    ranges is a list of tuples: (group_name, min_width_m, max_width_m)
+    """
+    stats = fiber_statistics(measurements)
+    mapping: dict[str, int] = {}
+    for fiber_id, fiber_info in stats.items():
+        median_m = float(fiber_info["median_m"])
+        assigned_group = None
+        for group_idx, (_name, min_m, max_m) in enumerate(ranges):
+            if min_m <= median_m <= max_m:
+                assigned_group = group_idx
+                break
+        if assigned_group is not None:
+            mapping[fiber_id] = assigned_group
+
+    for measurement in measurements:
+        measurement.group = mapping.get(measurement.fiber_id)
+
+    return mapping
+
+
+def compute_histogram_data(
+    measurements: Iterable[Measurement],
+    mode: str = "fiber",
+    n_bins: int = 10,
+) -> dict[str, Any]:
+    """Computes bin edges, counts, and items for interactive histogram rendering."""
+    if mode == "fiber":
+        fibers = fiber_statistics(measurements)
+        items = [(fid, float(info["median_m"])) for fid, info in fibers.items()]
+    else:
+        items = [
+            (m.measurement_id, m.width_m)
+            for m in measurements
+            if m.accepted and math.isfinite(m.width_m) and m.width_m > 0
+        ]
+
+    if not items:
+        return {
+            "mode": mode,
+            "values": np.array([]),
+            "counts": np.array([]),
+            "bin_edges": np.array([]),
+            "items": [],
+            "mean_m": None,
+            "median_m": None,
+        }
+
+    vals = np.array([val for _, val in items], dtype=float)
+    counts, bin_edges = np.histogram(vals, bins=max(1, n_bins))
+
+    return {
+        "mode": mode,
+        "values": vals,
+        "counts": counts,
+        "bin_edges": bin_edges,
+        "items": items,
+        "mean_m": float(vals.mean()),
+        "median_m": float(np.median(vals)),
+    }

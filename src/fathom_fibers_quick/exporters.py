@@ -7,7 +7,13 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .analysis import fiber_level_summary, fiber_statistics, format_length_m, section_level_summary
+from .analysis import (
+    fiber_level_summary,
+    fiber_statistics,
+    format_length_m,
+    get_fiber_extrema,
+    section_level_summary,
+)
 from .model import Project
 
 GROUP_COLORS = [
@@ -53,20 +59,97 @@ def export_csv(project: Project, path: str | Path) -> Path:
     return path
 
 
-def export_annotated(project: Project, source_image: Image.Image, path: str | Path) -> Path:
+def export_annotated(
+    project: Project,
+    source_image: Image.Image,
+    path: str | Path,
+    show_ids: bool = True,
+    show_values: bool = True,
+    show_extrema: bool = False,
+    show_defects: bool = True,
+    show_legend: bool = True,
+) -> Path:
     path = Path(path)
     image = source_image.convert("RGB").copy()
     draw = ImageDraw.Draw(image)
-    font = ImageFont.load_default(size=16)
+    font = ImageFont.load_default(size=14)
+
+    # Shaded footer if present
+    if project.image.footer_bounds:
+        y0, y1 = project.image.footer_bounds
+        draw.rectangle([0, y0, image.width, y1], fill=(40, 40, 40, 180), outline=(255, 100, 100), width=2)
+        draw.text((10, y0 + 10), "FOOTER EXCLUIDO", fill=(255, 200, 200), font=font)
+
+    extrema_by_m: dict[str, list[str]] = {}
+    if show_extrema:
+        fibers = {m.fiber_id for m in project.measurements}
+        for fid in fibers:
+            f_ext = get_fiber_extrema(project.measurements, fid)
+            for mid, labels in f_ext.items():
+                extrema_by_m.setdefault(mid, []).extend(labels)
+
     for measurement in project.measurements:
-        color = GROUP_COLORS[(measurement.group or 0) % len(GROUP_COLORS)] if measurement.accepted else (130, 130, 130)
-        draw.line([measurement.p1, measurement.p2], fill=color, width=5)
-        radius = 6
+        if measurement.accepted:
+            color = GROUP_COLORS[(measurement.group or 0) % len(GROUP_COLORS)]
+            width = 4
+        else:
+            color = (130, 130, 130)
+            width = 2
+
+        draw.line([measurement.p1, measurement.p2], fill=color, width=width)
+        radius = 5
         for x, y in (measurement.p1, measurement.p2):
-            draw.ellipse((x-radius, y-radius, x+radius, y+radius), fill=color, outline=(255, 255, 255), width=2)
-        center = measurement.center
-        label = f"{measurement.fiber_id}: {measurement.width_m * 1e6:.3f} µm"
-        draw.text((center[0] + 8, center[1] + 8), label, fill=(255, 255, 0), font=font, stroke_width=2, stroke_fill=(0, 0, 0))
+            draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color, outline=(255, 255, 255), width=2)
+
+        parts = []
+        if show_ids:
+            parts.append(measurement.fiber_id)
+        if show_values:
+            parts.append(f"{measurement.width_m * 1e6:.3f} µm")
+        if show_defects and measurement.defect != "None":
+            parts.append(f"[{measurement.defect}]")
+        if show_extrema and measurement.measurement_id in extrema_by_m:
+            ext_label = "/".join(extrema_by_m[measurement.measurement_id])
+            parts.append(f"({ext_label})")
+
+        if parts:
+            center = measurement.center
+            label = " ".join(parts)
+            draw.text(
+                (center[0] + 8, center[1] + 8),
+                label,
+                fill=(255, 255, 0),
+                font=font,
+                stroke_width=2,
+                stroke_fill=(0, 0, 0),
+            )
+
+    # Header summary overlay
+    f_stats = fiber_level_summary(project.measurements)
+    if f_stats["n_fibers"] > 0:
+        med_str = format_length_m(float(f_stats["median_m"])) if f_stats["median_m"] else "—"
+        p05_str = format_length_m(float(f_stats["p05_m"])) if f_stats["p05_m"] else "—"
+        p95_str = format_length_m(float(f_stats["p95_m"])) if f_stats["p95_m"] else "—"
+        summary_text = (
+            f"Fathom Fibers | Sample: {Path(project.image.path).name}\n"
+            f"Fibras: {f_stats['n_fibers']} | Mediana por fibra: {med_str} | P05-P95: {p05_str} - {p95_str}"
+        )
+        draw.rectangle([10, 10, 520, 50], fill=(0, 0, 0, 180), outline=(255, 255, 255))
+        draw.text((16, 14), summary_text, fill=(255, 255, 255), font=font)
+
+    # Legend if requested
+    if show_legend:
+        group_names = project.group_names
+        legend_y = 60
+        draw.rectangle([10, legend_y, 220, legend_y + 25 + max(1, len(group_names)) * 20], fill=(0, 0, 0, 180), outline=(200, 200, 200))
+        draw.text((16, legend_y + 4), "Grupos de tamaño:", fill=(255, 255, 255), font=font)
+        for g_idx in range(max(1, len(group_names))):
+            g_color = GROUP_COLORS[g_idx % len(GROUP_COLORS)]
+            g_name = group_names.get(g_idx, f"Grupo {g_idx + 1}")
+            item_y = legend_y + 24 + g_idx * 20
+            draw.rectangle([16, item_y + 2, 28, item_y + 14], fill=g_color, outline=(255, 255, 255))
+            draw.text((34, item_y), g_name, fill=(255, 255, 255), font=font)
+
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path)
     return path
