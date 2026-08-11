@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import shutil
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -13,6 +16,8 @@ from .measurement_geometry import (
 from .measurement_records import MeasurementKind
 from .model import Project, compute_measurement_width
 from .zeiss import file_sha256
+
+CURRENT_PROJECT_SCHEMA = 4
 
 
 class SourceVerificationStatus(str, Enum):
@@ -102,20 +107,67 @@ def recalculate_and_validate_project(project: Project, tolerance: float = 1e-12)
     return corrections_count
 
 
-def save_project(project: Project, path: str | Path) -> Path:
+def _legacy_backup_if_needed(path: Path) -> Path | None:
+    if not path.exists():
+        return None
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        version = int(existing.get("schema_version", 1))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if version >= CURRENT_PROJECT_SCHEMA:
+        return None
+    backup = path.with_name(f"{path.name}.schema-v{version}.bak")
+    if not backup.exists():
+        shutil.copy2(path, backup)
+    return backup
+
+
+def save_project(
+    project: Project,
+    path: str | Path,
+    *,
+    create_legacy_backup: bool = True,
+) -> Path:
     path = Path(path)
-    if path.suffix.lower() != ".fiberquick.json":
+    if not path.name.lower().endswith(".fiberquick.json"):
         if path.suffix:
             path = path.with_suffix(path.suffix + ".fiberquick.json")
         else:
             path = path.with_suffix(".fiberquick.json")
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    if create_legacy_backup:
+        _legacy_backup_if_needed(path)
     payload = project.to_dict()
     payload["project_path"] = str(path.resolve())
-    temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(path)
+    serialized = json.dumps(payload, indent=2, ensure_ascii=False)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+        encoding="utf-8",
+    ) as handle:
+        temporary = Path(handle.name)
+        handle.write(serialized)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        temporary.replace(path)
+        try:
+            dir_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+    finally:
+        if temporary.exists():
+            temporary.unlink()
     project.project_path = str(path.resolve())
+    project.schema_version = CURRENT_PROJECT_SCHEMA
     return path
 
 

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+
+logger = logging.getLogger(__name__)
 
 
 def get_timestamp_str() -> str:
@@ -46,7 +49,7 @@ class HistoryManager:
             try:
                 cb()
             except (ValueError, KeyError, RuntimeError, TypeError):
-                pass
+                logger.exception("History change callback failed")
 
     def push_and_execute(self, cmd: Command) -> None:
         cmd.execute()

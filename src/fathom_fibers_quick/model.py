@@ -78,6 +78,9 @@ class Project:
     fiber_notes: dict[str, str] = field(default_factory=dict)
     group_names: dict[int, str] = field(default_factory=dict)
     manual_ranges: list[dict[str, Any]] = field(default_factory=list)
+    roi_definitions: list[dict[str, Any]] = field(default_factory=list)
+    analysis_runs: list[dict[str, Any]] = field(default_factory=list)
+    history_metadata: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def measurements(self) -> list[MeasurementRecord]:
@@ -90,7 +93,7 @@ class Project:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "image": {
                 "path": self.image.path,
                 "width_px": self.image.width_px,
@@ -114,6 +117,9 @@ class Project:
             "fiber_notes": self.fiber_notes,
             "group_names": {str(k): v for k, v in self.group_names.items()},
             "manual_ranges": self.manual_ranges,
+            "roi_definitions": self.roi_definitions,
+            "analysis_runs": self.analysis_runs,
+            "history_metadata": self.history_metadata,
         }
 
     @classmethod
@@ -192,6 +198,9 @@ class Project:
             fiber_notes=dict(data.get("fiber_notes", {})),
             group_names={int(k): str(v) for k, v in data.get("group_names", {}).items()},
             manual_ranges=list(data.get("manual_ranges", [])),
+            roi_definitions=list(data.get("roi_definitions", [])),
+            analysis_runs=list(data.get("analysis_runs", [])),
+            history_metadata=list(data.get("history_metadata", [])),
         )
 
     def next_measurement_id(self) -> str:

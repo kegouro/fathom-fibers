@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import tempfile
 from pathlib import Path
 
 from .model import Project
 from .project_io import load_project, save_project
+
+logger = logging.getLogger(__name__)
 
 
 def get_autosave_dir() -> Path:
@@ -48,14 +51,20 @@ def perform_atomic_autosave(project: Project) -> Path | None:
         temp_dir = path.parent
         temp_dir.mkdir(parents=True, exist_ok=True)
 
-        with tempfile.NamedTemporaryFile("w", dir=temp_dir, delete=False, encoding="utf-8") as tf:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=temp_dir,
+            suffix=".fiberquick.json",
+            delete=False,
+            encoding="utf-8",
+        ) as tf:
             temp_path = Path(tf.name)
-            save_project(project, temp_path)
+        saved_temp_path = save_project(project, temp_path, create_legacy_backup=False)
 
-        temp_path.replace(path)
+        saved_temp_path.replace(path)
         return path
-    except Exception as exc:
-        print(f"Non-fatal autosave warning: {exc}")
+    except Exception:
+        logger.exception("Non-fatal autosave failure")
         return None
 
 

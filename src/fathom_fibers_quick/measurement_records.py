@@ -19,6 +19,7 @@ class MeasurementKind(str, Enum):
     RECTANGLE_AREA = "RECTANGLE_AREA"
     POLYGON_AREA = "POLYGON_AREA"
     INTENSITY_PROFILE = "INTENSITY_PROFILE"
+    DIAMETER_DISTRIBUTION = "DIAMETER_DISTRIBUTION"
 
 
 class MeasurementStatus(str, Enum):
@@ -35,6 +36,9 @@ class MeasurementSource(str, Enum):
     ASSISTED = "ASSISTED"
     AUTO_ROI_COMPONENT = "AUTO_ROI_COMPONENT"
     IMPORTED = "IMPORTED"
+    FATHOM = "FATHOM"
+    SIMPOLY_SOURCE_COMPAT = "SOURCE_COMPAT"
+    SIMPOLY_CONTROLLED_INPUT = "CONTROLLED_INPUT"
 
 
 @dataclass
@@ -130,6 +134,9 @@ class MeasurementRecord:
         elif self.kind == MeasurementKind.INTENSITY_PROFILE:
             val = self.values.get("length_m")
             return float(val) if val is not None else None
+        elif self.kind == MeasurementKind.DIAMETER_DISTRIBUTION:
+            val = self.values.get("main_reported_value_m")
+            return float(val) if val is not None else None
         return None
 
     @property
@@ -140,6 +147,8 @@ class MeasurementRecord:
             return "deg"
         elif self.kind in {MeasurementKind.RECTANGLE_AREA, MeasurementKind.POLYGON_AREA}:
             return "m²"
+        elif self.kind == MeasurementKind.DIAMETER_DISTRIBUTION:
+            return "m"
         return ""
 
     @property
@@ -211,9 +220,16 @@ class MeasurementRecord:
 
     @method.setter
     def method(self, val: str) -> None:
-        if "ASSISTED" in val.upper():
+        upper = val.upper()
+        if "SOURCE_COMPAT" in upper or "SIMPOLY_SOURCE" in upper:
+            self.source = MeasurementSource.SIMPOLY_SOURCE_COMPAT
+        elif "CONTROLLED_INPUT" in upper or "SIMPOLY_CONTROLLED" in upper:
+            self.source = MeasurementSource.SIMPOLY_CONTROLLED_INPUT
+        elif upper == "FATHOM":
+            self.source = MeasurementSource.FATHOM
+        elif "ASSISTED" in upper:
             self.source = MeasurementSource.ASSISTED
-        elif "AUTO" in val.upper():
+        elif "AUTO" in upper:
             self.source = MeasurementSource.AUTO_ROI_COMPONENT
         elif "IMPORT" in val.upper():
             self.source = MeasurementSource.IMPORTED
@@ -264,9 +280,16 @@ class MeasurementRecord:
             status = MeasurementStatus.ACCEPTED if data.get("accepted", True) else MeasurementStatus.REJECTED
 
         source_raw = data.get("source", data.get("method", "MANUAL"))
-        if "ASSISTED" in str(source_raw).upper():
+        source_upper = str(source_raw).upper()
+        if "SOURCE_COMPAT" in source_upper or "SIMPOLY_SOURCE" in source_upper:
+            source = MeasurementSource.SIMPOLY_SOURCE_COMPAT
+        elif "CONTROLLED_INPUT" in source_upper or "SIMPOLY_CONTROLLED" in source_upper:
+            source = MeasurementSource.SIMPOLY_CONTROLLED_INPUT
+        elif source_upper == "FATHOM":
+            source = MeasurementSource.FATHOM
+        elif "ASSISTED" in source_upper:
             source = MeasurementSource.ASSISTED
-        elif "AUTO" in str(source_raw).upper():
+        elif "AUTO" in source_upper:
             source = MeasurementSource.AUTO_ROI_COMPONENT
         elif "IMPORT" in str(source_raw).upper():
             source = MeasurementSource.IMPORTED
