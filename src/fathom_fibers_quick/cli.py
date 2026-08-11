@@ -62,6 +62,7 @@ def main() -> None:
 
     gui = sub.add_parser("gui", help="Launch the interactive application")
     gui.add_argument("path", nargs="?")
+    gui.add_argument("--smoke-test", action="store_true", help="Run an offscreen-safe Qt smoke test")
 
     inspect = sub.add_parser("inspect", help="Inspect Zeiss/TIFF metadata")
     inspect.add_argument("paths", nargs="+")
@@ -78,12 +79,18 @@ def main() -> None:
     eval_roi.add_argument("--input-dir", "-i", default="local_data/zeiss")
     eval_roi.add_argument("--output-dir", "-o", default="local_results/auto_roi_campaign")
 
+    sub.add_parser("benchmark", help="Run the bundled deterministic SIMPoly benchmark")
+
     args = parser.parse_args()
     if args.command in {None, "gui"}:
-        from .app import FiberQuickApp
-        app = FiberQuickApp(getattr(args, "path", None))
-        app.mainloop()
-        return
+        from .ui.app import launch
+
+        raise SystemExit(
+            launch(
+                getattr(args, "path", None),
+                smoke_test=getattr(args, "smoke_test", False),
+            )
+        )
     if args.command == "inspect":
         raise SystemExit(_inspect(args.paths, args.hash))
     if args.command == "evaluate-auto-roi":
@@ -107,6 +114,11 @@ def main() -> None:
         return
     if args.command == "inventory":
         raise SystemExit(_inventory(args.directory, args.output))
+    if args.command == "benchmark":
+        from .oracles.simpoly import run_synthetic_benchmark_suite
+
+        _runs, _comparisons, summary = run_synthetic_benchmark_suite()
+        print(json.dumps(summary, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
