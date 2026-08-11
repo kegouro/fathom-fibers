@@ -8,8 +8,26 @@ from scipy import ndimage, optimize
 from skimage import exposure, feature, filters, morphology
 
 from .model import Calibration
+from .oracles.simpoly_source import ParityClassification
 
 METHOD_NAME = "SIMPOLY_LITERATURE_REIMPLEMENTATION_V1"
+
+# This historical comparison implementation is deliberately retained for its
+# published-benchmark regression. It is not either source-compatible profile.
+SIMPOLY_COMPAT_DEVIATIONS: dict[str, ParityClassification] = {
+    "detected_footer_instead_of_fixed_90_rows": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "clahe_without_following_histeq": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "erosion_disk_3_instead_of_5": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "default_canny_instead_of_0_2_0_4": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "otsu_on_reconstruction_without_plus_0_1": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "component_filter_on_mask_not_edges": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "closing_disk_2_instead_of_1": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "single_median_filter_not_equal_count_loop": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "dilation_instead_of_bwmorph_sequence": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "simplified_branchpoint_removal": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "fixed_40_bin_centers_not_automatic_left_edges": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "mathematical_gaussian_not_matlab_gauss1": ParityClassification.CLOSE_REIMPLEMENTATION,
+}
 
 
 def fit_1d_gaussian(data: Sequence[float], n_bins: int = 40) -> tuple[float, float, float]:

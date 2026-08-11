@@ -71,3 +71,14 @@ exact MATLAB parity. Finite Python tests establish internal behavior only. The
 source-compatible pixel domain should be presented as approximately 10–100 px,
 and results remain projected 2D geometry. SIMPoly's fitted distribution center
 and Fathom's manual or section-based widths need not estimate the same quantity.
+
+## Historical literature implementation
+
+`simpoly_compat.py` remains available as
+`SIMPOLY_LITERATURE_REIMPLEMENTATION_V1` because the existing synthetic published-
+benchmark campaign depends on it. It is not an alias for either source-compatible
+profile. `SIMPOLY_COMPAT_DEVIATIONS` classifies its dynamic footer, omitted
+histogram equalization, different morphology/thresholds, fixed 40-bin histogram
+and mathematical Gaussian fit as `CLOSE_REIMPLEMENTATION` or
+`MATLAB_PARITY_UNVERIFIED`. Its algorithm was not changed to improve the currently
+failing benchmark gate.
