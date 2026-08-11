@@ -21,32 +21,35 @@ class ParityClassification(str, Enum):
     CLOSE_REIMPLEMENTATION = "CLOSE_REIMPLEMENTATION"
     VERSION_DEPENDENT = "VERSION_DEPENDENT"
     MATLAB_PARITY_UNVERIFIED = "MATLAB_PARITY_UNVERIFIED"
+    BITWISE_PARITY = "BITWISE_PARITY"
+    NUMERICAL_PARITY = "NUMERICAL_PARITY"
+    CROSS_VALIDATED_WITH_TOLERANCE = "CROSS_VALIDATED_WITH_TOLERANCE"
 
 
 # This is intentionally stage-level rather than one misleading global parity claim.
-# The source rules are confirmed by the canonical MATLAB file.  Image Processing
-# Toolbox equivalence is not claimed where no executable MATLAB oracle exists.
+# Source rules come from the canonical file; parity labels additionally reflect
+# isolated MATLAB R2026a Update 4 probes and the frozen real-TIFF campaign.
 SIMPOLY_STAGE_PARITY: dict[str, ParityClassification] = {
-    "crop_first_channel_footer_90": ParityClassification.EXACT_SOURCE_RULE,
-    "adapthisteq": ParityClassification.MATLAB_PARITY_UNVERIFIED,
-    "histeq": ParityClassification.MATLAB_PARITY_UNVERIFIED,
-    "grayscale_erosion_disk_5": ParityClassification.VERSION_DEPENDENT,
-    "morphological_reconstruction": ParityClassification.CLOSE_REIMPLEMENTATION,
-    "canny_0_2_0_4": ParityClassification.MATLAB_PARITY_UNVERIFIED,
-    "bwareaopen_20": ParityClassification.EXACT_SOURCE_RULE,
-    "bwmorph_thicken_1": ParityClassification.MATLAB_PARITY_UNVERIFIED,
-    "graythresh_plus_0_1_on_ihist": ParityClassification.EXACT_SOURCE_RULE,
-    "closing_disk_1": ParityClassification.VERSION_DEPENDENT,
-    "bwmorph_clean_fill_majority": ParityClassification.TESTED_INTERNAL_SEMANTICS,
-    "bwmorph_thin_4": ParityClassification.MATLAB_PARITY_UNVERIFIED,
-    "median_stop_equal_foreground_count": ParityClassification.EXACT_SOURCE_RULE,
-    "bwmorph_thicken_4": ParityClassification.MATLAB_PARITY_UNVERIFIED,
-    "bwskel": ParityClassification.MATLAB_PARITY_UNVERIFIED,
-    "branchpoints": ParityClassification.MATLAB_PARITY_UNVERIFIED,
-    "branch_guard_disk_3": ParityClassification.EXACT_SOURCE_RULE,
-    "spur_1": ParityClassification.MATLAB_PARITY_UNVERIFIED,
-    "edge_distance_guard_55_px": ParityClassification.EXACT_FORMULA,
-    "diameter_map_2x_edt": ParityClassification.EXACT_FORMULA,
+    "crop_first_channel_footer_90": ParityClassification.BITWISE_PARITY,
+    "adapthisteq": ParityClassification.CROSS_VALIDATED_WITH_TOLERANCE,
+    "histeq": ParityClassification.BITWISE_PARITY,
+    "grayscale_erosion_disk_5": ParityClassification.BITWISE_PARITY,
+    "morphological_reconstruction": ParityClassification.BITWISE_PARITY,
+    "canny_0_2_0_4": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "bwareaopen_20": ParityClassification.BITWISE_PARITY,
+    "bwmorph_thicken_1": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "graythresh_plus_0_1_on_ihist": ParityClassification.BITWISE_PARITY,
+    "closing_disk_1": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "bwmorph_clean_fill_majority": ParityClassification.BITWISE_PARITY,
+    "bwmorph_thin_4": ParityClassification.BITWISE_PARITY,
+    "median_stop_equal_foreground_count": ParityClassification.BITWISE_PARITY,
+    "bwmorph_thicken_4": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "bwskel": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "branchpoints": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "branch_guard_disk_3": ParityClassification.BITWISE_PARITY,
+    "spur_1": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "edge_distance_guard_55_px": ParityClassification.NUMERICAL_PARITY,
+    "diameter_map_2x_edt": ParityClassification.NUMERICAL_PARITY,
     "automatic_histogram": ParityClassification.VERSION_DEPENDENT,
     "prepend_two_zeros": ParityClassification.EXACT_SOURCE_RULE,
     "gauss1_fit": ParityClassification.MATLAB_PARITY_UNVERIFIED,
@@ -87,6 +90,20 @@ class SIMPolyIntermediates:
     median_iterations: int = 0
     median_stopped_by_equal_count: bool = False
     masks_equal_at_stop: bool = False
+    marker: np.ndarray | None = None
+    canny_raw: np.ndarray | None = None
+    canny_area_filtered: np.ndarray | None = None
+    threshold_level: float | None = None
+    bw_threshold: np.ndarray | None = None
+    bw_closed: np.ndarray | None = None
+    bw_clean: np.ndarray | None = None
+    bw_fill: np.ndarray | None = None
+    bw_majority: np.ndarray | None = None
+    bw_thin: np.ndarray | None = None
+    branchpoints: np.ndarray | None = None
+    skeleton_without_branches: np.ndarray | None = None
+    skeleton_after_spur: np.ndarray | None = None
+    edge_distance_map: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -113,11 +130,12 @@ class SIMPolySourceResult:
 
 # --- MATLAB bwmorph Morphological Semantics Implementation ---
 
+
 def bwmorph_clean(bw: np.ndarray, iterations: int = 1) -> np.ndarray:
     """Removes isolated pixels (1s with 0 8-neighbors)."""
     res = bw.copy().astype(bool)
     kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=int)
-    for _ in range(min(iterations, 100)):
+    for _ in range(iterations):
         neighbors = ndimage.convolve(res.astype(int), kernel, mode="constant")
         isolated = res & (neighbors == 0)
         if not np.any(isolated):
@@ -130,7 +148,7 @@ def bwmorph_fill(bw: np.ndarray, iterations: int = 1) -> np.ndarray:
     """Fills isolated background holes (0s with 8 8-neighbors)."""
     res = bw.copy().astype(bool)
     kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=int)
-    for _ in range(min(iterations, 100)):
+    for _ in range(iterations):
         neighbors = ndimage.convolve(res.astype(int), kernel, mode="constant")
         holes = (~res) & (neighbors == 8)
         if not np.any(holes):
@@ -143,7 +161,7 @@ def bwmorph_majority(bw: np.ndarray, iterations: int = 1) -> np.ndarray:
     """Pixel is 1 if >= 5 pixels in 3x3 neighborhood are 1, 0 otherwise."""
     res = bw.copy().astype(bool)
     kernel = np.array([[1, 1, 1], [1, 1, 1], [1, 1, 1]], dtype=int)
-    for _ in range(min(iterations, 100)):
+    for _ in range(iterations):
         counts = ndimage.convolve(res.astype(int), kernel, mode="constant")
         new_res = counts >= 5
         if np.array_equal(new_res, res):
@@ -158,25 +176,48 @@ def bwmorph_thin(bw: np.ndarray, iterations: int = 4) -> np.ndarray:
 
 
 def bwmorph_thicken(bw: np.ndarray, iterations: int = 4) -> np.ndarray:
-    """Applies thickening iteration (inversion of thinning on background)."""
-    inverted_thinned = morphology.thin(~bw, max_num_iter=iterations)
-    return ~inverted_thinned
+    """MATLAB-compatible dual thinning without finite-image border artifacts."""
+    if iterations <= 0:
+        return np.asarray(bw, dtype=bool).copy()
+    # MATLAB treats the outside of BW as background.  Taking the complement on
+    # an unpadded finite array incorrectly turns its border into foreground.
+    pad = max(8, 2 * iterations)
+    padded = np.pad(np.asarray(bw, dtype=bool), pad, mode="constant")
+    result = ~morphology.thin(~padded, max_num_iter=iterations)
+    return result[pad:-pad, pad:-pad]
 
 
 def bwmorph_branchpoints(skel: np.ndarray) -> np.ndarray:
-    """Finds skeleton branchpoints (pixels with >= 3 8-neighbors)."""
-    kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=int)
-    neighbors = ndimage.convolve(skel.astype(int), kernel, mode="constant")
-    return skel.astype(bool) & (neighbors >= 3)
+    """Apply the exhaustive R2026a ``branchpoints`` 3x3 lookup table."""
+    packed = bytes.fromhex(
+        "000000600000287e000068540000fe5d000068fe0000feff00007e740000ff7f"
+        "000068fe00000e4f0000fefd0000ef4d00007eff00002e7f0000207400002e84"
+    )
+    lut = np.unpackbits(np.frombuffer(packed, dtype=np.uint8), bitorder="little").astype(bool)
+    source = np.asarray(skel, dtype=bool)
+    windows = np.lib.stride_tricks.sliding_window_view(np.pad(source, 1), (3, 3))
+    codes = np.zeros(source.shape, dtype=np.uint16)
+    for row in range(3):
+        for column in range(3):
+            codes |= windows[:, :, row, column].astype(np.uint16) << (row + 3 * column)
+    return lut[codes]
 
 
 def bwmorph_spur(skel: np.ndarray, iterations: int = 1) -> np.ndarray:
-    """Removes 1-pixel spur end branches."""
+    """Remove MATLAB-style endpoints for the requested number of iterations."""
     res = skel.copy().astype(bool)
-    kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=int)
     for _ in range(iterations):
-        neighbors = ndimage.convolve(res.astype(int), kernel, mode="constant")
-        endpoints = res & (neighbors == 1)
+        north = np.pad(res, 1)[:-2, 1:-1]
+        south = np.pad(res, 1)[2:, 1:-1]
+        west = np.pad(res, 1)[1:-1, :-2]
+        east = np.pad(res, 1)[1:-1, 2:]
+        nw = np.pad(res, 1)[:-2, :-2]
+        ne = np.pad(res, 1)[:-2, 2:]
+        sw = np.pad(res, 1)[2:, :-2]
+        se = np.pad(res, 1)[2:, 2:]
+        cardinal = north.astype(int) + south + west + east
+        diagonal = nw.astype(int) + ne + sw + se
+        endpoints = res & ((cardinal == 1) | ((cardinal == 0) & (diagonal == 1)))
         if not np.any(endpoints):
             break
         res[endpoints] = False
@@ -185,7 +226,10 @@ def bwmorph_spur(skel: np.ndarray, iterations: int = 1) -> np.ndarray:
 
 # --- MATLAB Histogram & Gaussian Fit Reimplementation ---
 
-def fit_matlab_gauss1(x: np.ndarray, y: np.ndarray) -> tuple[float | None, float | None, float | None]:
+
+def fit_matlab_gauss1(
+    x: np.ndarray, y: np.ndarray
+) -> tuple[float | None, float | None, float | None]:
     """Fit the MATLAB ``gauss1`` formula with SciPy's optimizer.
 
     The formula is exact, but optimizer initialization/convergence is not
@@ -233,15 +277,85 @@ def _as_matlab_unit_interval(image: np.ndarray) -> np.ndarray:
     return result
 
 
+def _quantize_like_matlab_image(values: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    """Return a normalized array after MATLAB-style integer class quantization."""
+    if not np.issubdtype(dtype, np.integer):
+        return np.asarray(values, dtype=np.float64)
+    info = np.iinfo(dtype)
+    levels = float(info.max - info.min)
+    quantized = np.rint(np.clip(values, 0.0, 1.0) * levels + info.min)
+    return (quantized - info.min) / levels
+
+
+def _matlab_histeq_default(image: np.ndarray, source_dtype: np.dtype) -> np.ndarray:
+    """Reproduce ``histeq(I)``'s 64-level cumulative-error mapping for integers."""
+    if not np.issubdtype(source_dtype, np.integer):
+        # Float profiles are not used by the canonical TIFF campaign.
+        return exposure.equalize_hist(image, nbins=256)
+    info = np.iinfo(source_dtype)
+    n_input = info.max - info.min + 1
+    indices = np.rint(np.clip(image, 0.0, 1.0) * (n_input - 1)).astype(np.int64)
+    counts = np.bincount(indices.ravel(), minlength=n_input).astype(np.float64)
+    cumulative = np.cumsum(counts)
+    desired = np.cumsum(np.full(64, indices.size / 64.0))
+    adjacent_min = np.minimum(
+        np.concatenate((counts[:-1], [0.0])),
+        np.concatenate(([0.0], counts[1:])),
+    )
+    errors = desired[:, None] - cumulative[None, :] + adjacent_min[None, :] / 2.0
+    errors[errors < -indices.size * math.sqrt(np.finfo(float).eps)] = indices.size
+    transform = np.argmin(errors, axis=0).astype(np.float64) / 63.0
+    mapped = transform[indices]
+    return _quantize_like_matlab_image(mapped, source_dtype)
+
+
 def _bwareaopen_4_connected(mask: np.ndarray, minimum_area: int) -> np.ndarray:
-    """Reproduce ``bwareaopen(BW, P)``'s strict ``area < P`` removal rule."""
+    """Reproduce 2-D ``bwareaopen(BW, P)`` (8-connectivity, area < P)."""
     if minimum_area <= 1:
         return mask.astype(bool, copy=True)
     try:
         # scikit-image >=0.26 names the largest removed size explicitly.
-        return morphology.remove_small_objects(mask, max_size=minimum_area - 1, connectivity=1)
+        return morphology.remove_small_objects(mask, max_size=minimum_area - 1, connectivity=2)
     except TypeError:  # pragma: no cover - compatibility with scikit-image <=0.25
-        return morphology.remove_small_objects(mask, min_size=minimum_area, connectivity=1)
+        return morphology.remove_small_objects(mask, min_size=minimum_area, connectivity=2)
+
+
+def _matlab_graythresh(image: np.ndarray, source_dtype: np.dtype) -> float:
+    """MATLAB/graythresh Otsu level on the discrete image-class histogram."""
+    if not np.issubdtype(source_dtype, np.integer):
+        return float(filters.threshold_otsu(image))
+    info = np.iinfo(source_dtype)
+    levels = info.max - info.min + 1
+    indices = np.rint(np.clip(image, 0.0, 1.0) * (levels - 1)).astype(np.int64)
+    counts = np.bincount(indices.ravel(), minlength=levels).astype(np.float64)
+    probabilities = counts / counts.sum()
+    omega = np.cumsum(probabilities)
+    means = np.cumsum(probabilities * np.arange(levels))
+    total_mean = means[-1]
+    denominator = omega * (1.0 - omega)
+    between = np.zeros_like(denominator)
+    valid = denominator > 0
+    between[valid] = (total_mean * omega[valid] - means[valid]) ** 2 / denominator[valid]
+    maxima = np.flatnonzero(np.isclose(between, between.max(), rtol=0.0, atol=0.0))
+    return float(np.mean(maxima) / (levels - 1))
+
+
+def _matlab_disk5_footprint() -> np.ndarray:
+    """R2026a ``strel('disk',5)`` default decomposed neighborhood."""
+    return np.array(
+        [
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+            [0, 1, 1, 1, 1, 1, 1, 1, 0],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [0, 1, 1, 1, 1, 1, 1, 1, 0],
+            [0, 0, 1, 1, 1, 1, 1, 0, 0],
+        ],
+        dtype=bool,
+    )
 
 
 def run_simpoly_source_pipeline(
@@ -266,10 +380,19 @@ def run_simpoly_source_pipeline(
             empty_arr = np.array([], dtype=np.float64)
             dummy = np.zeros((1, 1), dtype=np.uint8)
             inter = SIMPolyIntermediates(
-                cropped=dummy, clahe=dummy, equalized=dummy, reconstruction=dummy,
-                canny_edges=dummy, threshold_mask=dummy, morph_mask=dummy,
-                median_mask=dummy, thickened_mask=dummy, raw_skeleton=dummy,
-                branch_guard=dummy, valid_skeleton=dummy, distance_map=dummy
+                cropped=dummy,
+                clahe=dummy,
+                equalized=dummy,
+                reconstruction=dummy,
+                canny_edges=dummy,
+                threshold_mask=dummy,
+                morph_mask=dummy,
+                median_mask=dummy,
+                thickened_mask=dummy,
+                raw_skeleton=dummy,
+                branch_guard=dummy,
+                valid_skeleton=dummy,
+                distance_map=dummy,
             )
             res = SIMPolySourceResult(
                 profile=config.profile,
@@ -298,34 +421,45 @@ def run_simpoly_source_pipeline(
     # Step 2 & 3. Contrast Enhancement: adapthisteq + histeq
     norm_crop = _as_matlab_unit_interval(I_crop)
 
-    I_clahe = exposure.equalize_adapthist(norm_crop, kernel_size=8, clip_limit=0.01)
-    I_equalized = exposure.equalize_hist(I_clahe)
+    # MATLAB's default is 8x8 *tiles*, not an 8-pixel kernel.  scikit-image's
+    # default kernel derives the same tile count; interpolation remains a close
+    # reimplementation and is quantified by the R2026a oracle.
+    I_clahe = exposure.equalize_adapthist(norm_crop, kernel_size=None, clip_limit=0.01, nbins=256)
+    I_clahe = _quantize_like_matlab_image(I_clahe, I_crop.dtype)
+    I_equalized = _matlab_histeq_default(I_clahe, I_crop.dtype)
 
     # Step 4 & 5. Grayscale erosion & Morphological Reconstruction
-    se_disk5 = morphology.disk(config.reconstruction_disk_radius)
+    if config.reconstruction_disk_radius == 5:
+        # R2026a strel('disk',5) default decomposition, confirmed by oracle.
+        se_disk5 = _matlab_disk5_footprint()
+    else:
+        se_disk5 = morphology.disk(config.reconstruction_disk_radius)
     marker = morphology.erosion(I_equalized, se_disk5)
     I_reconstructed = morphology.reconstruction(marker, I_equalized)
 
     # Step 6 & 7. Canny Edge Detection & Small edge removal
-    canny_edges = feature.canny(I_reconstructed, low_threshold=config.canny_low, high_threshold=config.canny_high)
+    canny_edges = feature.canny(
+        I_reconstructed, low_threshold=config.canny_low, high_threshold=config.canny_high
+    )
     canny_clean = _bwareaopen_4_connected(canny_edges, config.minimum_edge_area)
 
     # Step 8. bwmorph thicken x1 on edges
     edges_thickened = bwmorph_thicken(canny_clean, iterations=1)
 
     # Step 9 & 10. Otsu threshold computed from original cropped image I + 0.1, applied to I_equalized
-    thresh_val = float(filters.threshold_otsu(norm_crop)) + 0.1
+    thresh_val = _matlab_graythresh(norm_crop, I_crop.dtype) + 0.1
     thresh_val = min(max(thresh_val, 0.0), 1.0)
-    BW = I_equalized >= thresh_val
+    BW_threshold = I_equalized >= thresh_val
 
     # Step 11. Closing disk radius 1
-    BW = morphology.closing(BW, morphology.disk(config.closing_disk_radius))
+    BW_closed = morphology.closing(BW_threshold, morphology.disk(config.closing_disk_radius))
 
     # Step 12–15. bwmorph sequence: clean, fill, majority, thin x4
-    BW = bwmorph_clean(BW, 100000)
-    BW = bwmorph_fill(BW, 5000)
-    BW = bwmorph_majority(BW, 500)
-    BW = bwmorph_thin(BW, 4)
+    BW_clean = bwmorph_clean(BW_closed, 100000)
+    BW_fill = bwmorph_fill(BW_clean, 5000)
+    BW_majority = bwmorph_majority(BW_fill, 500)
+    BW_thin = bwmorph_thin(BW_majority, 4)
+    BW = BW_thin.copy()
 
     # Step 16. Iterative 3x3 Median filter loop stopping on EQUAL FOREGROUND PIXEL COUNT
     BWf = ndimage.median_filter(BW.astype(np.uint8), size=(3, 3)) > 0
@@ -343,17 +477,37 @@ def run_simpoly_source_pipeline(
     if not np.any(BW_thickened):
         empty_arr = np.array([], dtype=np.float64)
         inter = SIMPolyIntermediates(
-            cropped=I_crop, clahe=I_clahe, equalized=I_equalized, reconstruction=I_reconstructed,
-            canny_edges=edges_thickened, threshold_mask=BW, morph_mask=BW,
-            median_mask=BW, thickened_mask=BW_thickened, raw_skeleton=BW_thickened,
-            branch_guard=BW_thickened, valid_skeleton=BW_thickened, distance_map=BW_thickened,
-            median_iterations=med_iters, median_stopped_by_equal_count=True, masks_equal_at_stop=masks_equal_at_stop
+            cropped=I_crop,
+            clahe=I_clahe,
+            equalized=I_equalized,
+            reconstruction=I_reconstructed,
+            canny_edges=edges_thickened,
+            threshold_mask=BW,
+            morph_mask=BW,
+            median_mask=BW,
+            thickened_mask=BW_thickened,
+            raw_skeleton=BW_thickened,
+            branch_guard=BW_thickened,
+            valid_skeleton=BW_thickened,
+            distance_map=BW_thickened,
+            median_iterations=med_iters,
+            median_stopped_by_equal_count=True,
+            masks_equal_at_stop=masks_equal_at_stop,
         )
         res = SIMPolySourceResult(
-            profile=config.profile, local_diameters_px=empty_arr, histogram_counts=np.array([]),
-            histogram_edges=np.array([]), gaussian_amplitude=None, gaussian_center_px=None,
-            gaussian_c1_px=None, source_reported_stdev_px=None, mathematical_gaussian_sigma_px=None,
-            arithmetic_mean_px=None, median_px=None, status="NO_FOREGROUND", flags=("NO_FOREGROUND",),
+            profile=config.profile,
+            local_diameters_px=empty_arr,
+            histogram_counts=np.array([]),
+            histogram_edges=np.array([]),
+            gaussian_amplitude=None,
+            gaussian_center_px=None,
+            gaussian_c1_px=None,
+            source_reported_stdev_px=None,
+            mathematical_gaussian_sigma_px=None,
+            arithmetic_mean_px=None,
+            median_px=None,
+            status="NO_FOREGROUND",
+            flags=("NO_FOREGROUND",),
         )
         return res, inter
 
@@ -362,17 +516,37 @@ def run_simpoly_source_pipeline(
     if not np.any(raw_skel):
         empty_arr = np.array([], dtype=np.float64)
         inter = SIMPolyIntermediates(
-            cropped=I_crop, clahe=I_clahe, equalized=I_equalized, reconstruction=I_reconstructed,
-            canny_edges=edges_thickened, threshold_mask=BW, morph_mask=BW,
-            median_mask=BW, thickened_mask=BW_thickened, raw_skeleton=raw_skel,
-            branch_guard=raw_skel, valid_skeleton=raw_skel, distance_map=raw_skel,
-            median_iterations=med_iters, median_stopped_by_equal_count=True, masks_equal_at_stop=masks_equal_at_stop
+            cropped=I_crop,
+            clahe=I_clahe,
+            equalized=I_equalized,
+            reconstruction=I_reconstructed,
+            canny_edges=edges_thickened,
+            threshold_mask=BW,
+            morph_mask=BW,
+            median_mask=BW,
+            thickened_mask=BW_thickened,
+            raw_skeleton=raw_skel,
+            branch_guard=raw_skel,
+            valid_skeleton=raw_skel,
+            distance_map=raw_skel,
+            median_iterations=med_iters,
+            median_stopped_by_equal_count=True,
+            masks_equal_at_stop=masks_equal_at_stop,
         )
         res = SIMPolySourceResult(
-            profile=config.profile, local_diameters_px=empty_arr, histogram_counts=np.array([]),
-            histogram_edges=np.array([]), gaussian_amplitude=None, gaussian_center_px=None,
-            gaussian_c1_px=None, source_reported_stdev_px=None, mathematical_gaussian_sigma_px=None,
-            arithmetic_mean_px=None, median_px=None, status="NO_SKELETON", flags=("NO_SKELETON",),
+            profile=config.profile,
+            local_diameters_px=empty_arr,
+            histogram_counts=np.array([]),
+            histogram_edges=np.array([]),
+            gaussian_amplitude=None,
+            gaussian_center_px=None,
+            gaussian_c1_px=None,
+            source_reported_stdev_px=None,
+            mathematical_gaussian_sigma_px=None,
+            arithmetic_mean_px=None,
+            median_px=None,
+            status="NO_SKELETON",
+            flags=("NO_SKELETON",),
         )
         return res, inter
 
@@ -391,17 +565,37 @@ def run_simpoly_source_pipeline(
     if not np.any(valid_skel):
         empty_arr = np.array([], dtype=np.float64)
         inter = SIMPolyIntermediates(
-            cropped=I_crop, clahe=I_clahe, equalized=I_equalized, reconstruction=I_reconstructed,
-            canny_edges=edges_thickened, threshold_mask=BW, morph_mask=BW,
-            median_mask=BW, thickened_mask=BW_thickened, raw_skeleton=raw_skel,
-            branch_guard=branch_guard, valid_skeleton=valid_skel, distance_map=F,
-            median_iterations=med_iters, median_stopped_by_equal_count=True, masks_equal_at_stop=masks_equal_at_stop
+            cropped=I_crop,
+            clahe=I_clahe,
+            equalized=I_equalized,
+            reconstruction=I_reconstructed,
+            canny_edges=edges_thickened,
+            threshold_mask=BW,
+            morph_mask=BW,
+            median_mask=BW,
+            thickened_mask=BW_thickened,
+            raw_skeleton=raw_skel,
+            branch_guard=branch_guard,
+            valid_skeleton=valid_skel,
+            distance_map=F,
+            median_iterations=med_iters,
+            median_stopped_by_equal_count=True,
+            masks_equal_at_stop=masks_equal_at_stop,
         )
         res = SIMPolySourceResult(
-            profile=config.profile, local_diameters_px=empty_arr, histogram_counts=np.array([]),
-            histogram_edges=np.array([]), gaussian_amplitude=None, gaussian_center_px=None,
-            gaussian_c1_px=None, source_reported_stdev_px=None, mathematical_gaussian_sigma_px=None,
-            arithmetic_mean_px=None, median_px=None, status="NO_VALID_DIAMETERS", flags=("NO_VALID_DIAMETERS",),
+            profile=config.profile,
+            local_diameters_px=empty_arr,
+            histogram_counts=np.array([]),
+            histogram_edges=np.array([]),
+            gaussian_amplitude=None,
+            gaussian_center_px=None,
+            gaussian_c1_px=None,
+            source_reported_stdev_px=None,
+            mathematical_gaussian_sigma_px=None,
+            arithmetic_mean_px=None,
+            median_px=None,
+            status="NO_VALID_DIAMETERS",
+            flags=("NO_VALID_DIAMETERS",),
         )
         return res, inter
 
@@ -413,17 +607,37 @@ def run_simpoly_source_pipeline(
     if len(diameters) == 0:
         empty_arr = np.array([], dtype=np.float64)
         inter = SIMPolyIntermediates(
-            cropped=I_crop, clahe=I_clahe, equalized=I_equalized, reconstruction=I_reconstructed,
-            canny_edges=edges_thickened, threshold_mask=BW, morph_mask=BW,
-            median_mask=BW, thickened_mask=BW_thickened, raw_skeleton=raw_skel,
-            branch_guard=branch_guard, valid_skeleton=valid_skel, distance_map=Dist,
-            median_iterations=med_iters, median_stopped_by_equal_count=True, masks_equal_at_stop=masks_equal_at_stop
+            cropped=I_crop,
+            clahe=I_clahe,
+            equalized=I_equalized,
+            reconstruction=I_reconstructed,
+            canny_edges=edges_thickened,
+            threshold_mask=BW,
+            morph_mask=BW,
+            median_mask=BW,
+            thickened_mask=BW_thickened,
+            raw_skeleton=raw_skel,
+            branch_guard=branch_guard,
+            valid_skeleton=valid_skel,
+            distance_map=Dist,
+            median_iterations=med_iters,
+            median_stopped_by_equal_count=True,
+            masks_equal_at_stop=masks_equal_at_stop,
         )
         res = SIMPolySourceResult(
-            profile=config.profile, local_diameters_px=empty_arr, histogram_counts=np.array([]),
-            histogram_edges=np.array([]), gaussian_amplitude=None, gaussian_center_px=None,
-            gaussian_c1_px=None, source_reported_stdev_px=None, mathematical_gaussian_sigma_px=None,
-            arithmetic_mean_px=None, median_px=None, status="NO_VALID_DIAMETERS", flags=("NO_VALID_DIAMETERS",),
+            profile=config.profile,
+            local_diameters_px=empty_arr,
+            histogram_counts=np.array([]),
+            histogram_edges=np.array([]),
+            gaussian_amplitude=None,
+            gaussian_center_px=None,
+            gaussian_c1_px=None,
+            source_reported_stdev_px=None,
+            mathematical_gaussian_sigma_px=None,
+            arithmetic_mean_px=None,
+            median_px=None,
+            status="NO_VALID_DIAMETERS",
+            flags=("NO_VALID_DIAMETERS",),
         )
         return res, inter
 
@@ -468,11 +682,36 @@ def run_simpoly_source_pipeline(
         flags.append("GAUSSIAN_FIT_FAILED")
 
     inter = SIMPolyIntermediates(
-        cropped=I_crop, clahe=I_clahe, equalized=I_equalized, reconstruction=I_reconstructed,
-        canny_edges=edges_thickened, threshold_mask=BW, morph_mask=BW,
-        median_mask=BW, thickened_mask=BW_thickened, raw_skeleton=raw_skel,
-        branch_guard=branch_guard, valid_skeleton=valid_skel, distance_map=Dist,
-        median_iterations=med_iters, median_stopped_by_equal_count=True, masks_equal_at_stop=masks_equal_at_stop
+        cropped=I_crop,
+        clahe=I_clahe,
+        equalized=I_equalized,
+        reconstruction=I_reconstructed,
+        canny_edges=edges_thickened,
+        threshold_mask=BW,
+        morph_mask=BW,
+        median_mask=BW,
+        thickened_mask=BW_thickened,
+        raw_skeleton=raw_skel,
+        branch_guard=branch_guard,
+        valid_skeleton=valid_skel,
+        distance_map=Dist,
+        median_iterations=med_iters,
+        median_stopped_by_equal_count=True,
+        masks_equal_at_stop=masks_equal_at_stop,
+        marker=marker,
+        canny_raw=canny_edges,
+        canny_area_filtered=canny_clean,
+        threshold_level=thresh_val,
+        bw_threshold=BW_threshold,
+        bw_closed=BW_closed,
+        bw_clean=BW_clean,
+        bw_fill=BW_fill,
+        bw_majority=BW_majority,
+        bw_thin=BW_thin,
+        branchpoints=branchpoints,
+        skeleton_without_branches=raw_skel & (~branch_guard),
+        skeleton_after_spur=skel_clean,
+        edge_distance_map=F,
     )
 
     res = SIMPolySourceResult(

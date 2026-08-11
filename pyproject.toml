@@ -47,4 +47,11 @@ ignore = ["BLE001"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "src"]
-markers = ["slow: longer deterministic scientific regression"]
+markers = [
+  "unit: deterministic test without external runtimes",
+  "matlab: requires FATHOM_MATLAB_EXECUTABLE and a licensed MATLAB runtime",
+  "external: invokes a process outside the Python package",
+  "slow: longer deterministic scientific regression",
+  "realdata: requires the private canonical TIFF dataset",
+  "qt: exercises the PySide6 application offscreen",
+]
