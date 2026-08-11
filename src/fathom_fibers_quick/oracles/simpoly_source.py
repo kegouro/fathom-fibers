@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from enum import Enum
 
 import numpy as np
 from scipy import ndimage, optimize
@@ -9,6 +10,49 @@ from skimage import exposure, feature, filters, morphology
 
 PROFILE_SOURCE_COMPAT_V1 = "SIMPOLY_SOURCE_COMPAT_V1"
 PROFILE_CONTROLLED_INPUT_V1 = "SIMPOLY_CONTROLLED_INPUT_V1"
+
+
+class ParityClassification(str, Enum):
+    """Evidence level for one MATLAB-to-Python pipeline decision."""
+
+    EXACT_SOURCE_RULE = "EXACT_SOURCE_RULE"
+    EXACT_FORMULA = "EXACT_FORMULA"
+    TESTED_INTERNAL_SEMANTICS = "TESTED_INTERNAL_SEMANTICS"
+    CLOSE_REIMPLEMENTATION = "CLOSE_REIMPLEMENTATION"
+    VERSION_DEPENDENT = "VERSION_DEPENDENT"
+    MATLAB_PARITY_UNVERIFIED = "MATLAB_PARITY_UNVERIFIED"
+
+
+# This is intentionally stage-level rather than one misleading global parity claim.
+# The source rules are confirmed by the canonical MATLAB file.  Image Processing
+# Toolbox equivalence is not claimed where no executable MATLAB oracle exists.
+SIMPOLY_STAGE_PARITY: dict[str, ParityClassification] = {
+    "crop_first_channel_footer_90": ParityClassification.EXACT_SOURCE_RULE,
+    "adapthisteq": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "histeq": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "grayscale_erosion_disk_5": ParityClassification.VERSION_DEPENDENT,
+    "morphological_reconstruction": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "canny_0_2_0_4": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "bwareaopen_20": ParityClassification.EXACT_SOURCE_RULE,
+    "bwmorph_thicken_1": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "graythresh_plus_0_1_on_ihist": ParityClassification.EXACT_SOURCE_RULE,
+    "closing_disk_1": ParityClassification.VERSION_DEPENDENT,
+    "bwmorph_clean_fill_majority": ParityClassification.TESTED_INTERNAL_SEMANTICS,
+    "bwmorph_thin_4": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "median_stop_equal_foreground_count": ParityClassification.EXACT_SOURCE_RULE,
+    "bwmorph_thicken_4": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "bwskel": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "branchpoints": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "branch_guard_disk_3": ParityClassification.EXACT_SOURCE_RULE,
+    "spur_1": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "edge_distance_guard_55_px": ParityClassification.EXACT_FORMULA,
+    "diameter_map_2x_edt": ParityClassification.EXACT_FORMULA,
+    "automatic_histogram": ParityClassification.VERSION_DEPENDENT,
+    "prepend_two_zeros": ParityClassification.EXACT_SOURCE_RULE,
+    "gauss1_fit": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "main_result_b1": ParityClassification.EXACT_FORMULA,
+    "source_stdev_c1_over_2": ParityClassification.EXACT_FORMULA,
+}
 
 
 @dataclass(frozen=True)
@@ -59,6 +103,9 @@ class SIMPolySourceResult:
     arithmetic_mean_px: float | None
     median_px: float | None
     status: str
+    reported_center: float | None = None
+    reported_stdev: float | None = None
+    reported_unit: str = "px"
     flags: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -137,9 +184,10 @@ def bwmorph_spur(skel: np.ndarray, iterations: int = 1) -> np.ndarray:
 # --- MATLAB Histogram & Gaussian Fit Reimplementation ---
 
 def fit_matlab_gauss1(x: np.ndarray, y: np.ndarray) -> tuple[float | None, float | None, float | None]:
-    """Fits MATLAB gauss1 model: y = a1 * exp(-((x - b1) / c1)^2).
+    """Fit the MATLAB ``gauss1`` formula with SciPy's optimizer.
 
-    Returns (a1, b1, c1).
+    The formula is exact, but optimizer initialization/convergence is not
+    MATLAB-parity-verified. Returns ``(a1, b1, c1)``.
     """
     if len(x) < 3 or np.max(y) <= 0:
         return None, None, None
@@ -169,11 +217,40 @@ def fit_matlab_gauss1(x: np.ndarray, y: np.ndarray) -> tuple[float | None, float
 DEFAULT_SIMPOLY_SOURCE_CONFIG = SIMPolySourceConfig()
 
 
+def _as_matlab_unit_interval(image: np.ndarray) -> np.ndarray:
+    """Map supported MATLAB image classes to the normalized intensity domain."""
+    arr = np.asarray(image)
+    if np.issubdtype(arr.dtype, np.bool_):
+        return arr.astype(np.float64)
+    if np.issubdtype(arr.dtype, np.integer):
+        info = np.iinfo(arr.dtype)
+        return (arr.astype(np.float64) - info.min) / float(info.max - info.min)
+    result = arr.astype(np.float64)
+    if result.size and (float(np.nanmin(result)) < 0.0 or float(np.nanmax(result)) > 1.0):
+        raise ValueError("Floating-point MATLAB image input must lie in [0, 1]")
+    return result
+
+
+def _bwareaopen_4_connected(mask: np.ndarray, minimum_area: int) -> np.ndarray:
+    """Reproduce ``bwareaopen(BW, P)``'s strict ``area < P`` removal rule."""
+    if minimum_area <= 1:
+        return mask.astype(bool, copy=True)
+    try:
+        # scikit-image >=0.26 names the largest removed size explicitly.
+        return morphology.remove_small_objects(mask, max_size=minimum_area - 1, connectivity=1)
+    except TypeError:  # pragma: no cover - compatibility with scikit-image <=0.25
+        return morphology.remove_small_objects(mask, min_size=minimum_area, connectivity=1)
+
+
 def run_simpoly_source_pipeline(
     image: np.ndarray,
     config: SIMPolySourceConfig = DEFAULT_SIMPOLY_SOURCE_CONFIG,
 ) -> tuple[SIMPolySourceResult, SIMPolyIntermediates]:
-    """Executes the exact SIMPoly source pipeline following SIMPolyMatlabCode.m."""
+    """Execute the source-ordered SIMPoly pipeline.
+
+    Literal source decisions are preserved.  ``SIMPOLY_STAGE_PARITY`` records
+    where the Python primitive is not proven equivalent to MATLAB R2020a.
+    """
     flags: list[str] = []
 
     # Step 1. Image Crop (SOURCE_COMPAT removes bottom 90 rows; CONTROLLED_INPUT keeps cropped image body)
@@ -217,9 +294,7 @@ def run_simpoly_source_pipeline(
             I_crop = image.copy()
 
     # Step 2 & 3. Contrast Enhancement: adapthisteq + histeq
-    norm_crop = I_crop.astype(np.float32)
-    if norm_crop.max() > 1.0:
-        norm_crop /= 255.0
+    norm_crop = _as_matlab_unit_interval(I_crop)
 
     I_clahe = exposure.equalize_adapthist(norm_crop, kernel_size=8, clip_limit=0.01)
     I_equalized = exposure.equalize_hist(I_clahe)
@@ -231,10 +306,7 @@ def run_simpoly_source_pipeline(
 
     # Step 6 & 7. Canny Edge Detection & Small edge removal
     canny_edges = feature.canny(I_reconstructed, low_threshold=config.canny_low, high_threshold=config.canny_high)
-    try:
-        canny_clean = morphology.remove_small_objects(canny_edges, max_size=config.minimum_edge_area)
-    except TypeError:
-        canny_clean = morphology.remove_small_objects(canny_edges, min_size=config.minimum_edge_area)
+    canny_clean = _bwareaopen_4_connected(canny_edges, config.minimum_edge_area)
 
     # Step 8. bwmorph thicken x1 on edges
     edges_thickened = bwmorph_thicken(canny_clean, iterations=1)
@@ -260,8 +332,6 @@ def run_simpoly_source_pipeline(
         med_iters += 1
         BW = BWf
         BWf = ndimage.median_filter(BW.astype(np.uint8), size=(3, 3)) > 0
-        if med_iters >= 500:
-            break
 
     masks_equal_at_stop = bool(np.array_equal(BWf, BW))
 
@@ -355,22 +425,39 @@ def run_simpoly_source_pipeline(
         )
         return res, inter
 
-    # Step 26 & 27. Automatic Histogram & Prepending two zero-count samples
-    counts, edges = np.histogram(diameters, bins=30)
-    bin_centers = (edges[:-1] + edges[1:]) / 2.0
+    # Step 26 & 27. Conversion precedes MATLAB's automatic histogram. NumPy's
+    # automatic selector is version-dependent and is not claimed to reproduce
+    # MATLAB R2020a's exact automatic binning rule.
+    conversion = config.conversion_um_per_px
+    if conversion is not None and conversion <= 0:
+        raise ValueError("conversion_um_per_px must be positive when provided")
+    reported_diameters = diameters * conversion if conversion is not None else diameters
+    counts, edges = np.histogram(reported_diameters, bins="auto")
     first_edge = edges[0]
 
     y_fit = np.concatenate(([0.0, 0.0], counts.astype(np.float64)))
-    x_fit = np.concatenate(([first_edge - 2.0, first_edge - 1.0], bin_centers.astype(np.float64)))
+    # MATLAB uses h.BinEdges(1:end-1), not bin centers.
+    x_fit = np.concatenate(([first_edge - 2.0, first_edge - 1.0], edges[:-1].astype(np.float64)))
 
     # Step 28. Fit one-term Gaussian
     a1, b1, c1 = fit_matlab_gauss1(x_fit, y_fit)
 
     if b1 is not None and c1 is not None:
-        source_stdev = c1 / 2.0
-        math_sigma = c1 / math.sqrt(2.0)
+        reported_center = b1
+        reported_stdev = c1 / 2.0
+        reported_unit = "um" if conversion is not None else "px"
+        scale_to_px = conversion if conversion is not None else 1.0
+        center_px = b1 / scale_to_px
+        c1_px = c1 / scale_to_px
+        source_stdev = c1_px / 2.0
+        math_sigma = c1_px / math.sqrt(2.0)
         status = "OK"
     else:
+        reported_center = None
+        reported_stdev = None
+        reported_unit = "um" if conversion is not None else "px"
+        center_px = None
+        c1_px = None
         source_stdev = None
         math_sigma = None
         status = "GAUSSIAN_FIT_FAILED"
@@ -390,13 +477,16 @@ def run_simpoly_source_pipeline(
         histogram_counts=counts,
         histogram_edges=edges,
         gaussian_amplitude=a1,
-        gaussian_center_px=b1,
-        gaussian_c1_px=c1,
+        gaussian_center_px=center_px,
+        gaussian_c1_px=c1_px,
         source_reported_stdev_px=source_stdev,
         mathematical_gaussian_sigma_px=math_sigma,
         arithmetic_mean_px=float(np.mean(diameters)),
         median_px=float(np.median(diameters)),
         status=status,
+        reported_center=reported_center,
+        reported_stdev=reported_stdev,
+        reported_unit=reported_unit,
         flags=tuple(flags),
     )
 

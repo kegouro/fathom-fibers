@@ -11,6 +11,8 @@ from fathom_fibers_quick.oracles.simpoly_source import (
     PROFILE_CONTROLLED_INPUT_V1,
     PROFILE_SOURCE_COMPAT_V1,
     SIMPolySourceConfig,
+    _as_matlab_unit_interval,
+    _bwareaopen_4_connected,
     bwmorph_branchpoints,
     bwmorph_clean,
     bwmorph_fill,
@@ -63,6 +65,22 @@ def test_bwmorph_clean_semantics():
 
     cleaned = bwmorph_clean(arr)
     assert not cleaned[2, 2]
+
+
+def test_bwareaopen_preserves_component_of_exact_minimum_area():
+    arr = np.zeros((12, 12), dtype=bool)
+    arr[1:5, 1:6] = True  # exactly 20 pixels: MATLAB bwareaopen(BW, 20) retains it
+    arr[9, 9] = True
+
+    cleaned = _bwareaopen_4_connected(arr, 20)
+    assert cleaned[1:5, 1:6].all()
+    assert not cleaned[9, 9]
+
+
+def test_uint16_uses_full_matlab_class_range():
+    arr = np.array([0, 255, 65535], dtype=np.uint16)
+    normalized = _as_matlab_unit_interval(arr)
+    assert normalized.tolist() == pytest.approx([0.0, 255.0 / 65535.0, 1.0])
 
 
 def test_bwmorph_fill_semantics():
