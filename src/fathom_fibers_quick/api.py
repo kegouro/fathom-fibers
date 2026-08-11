@@ -237,8 +237,8 @@ class FathomEngine:
         baseline = simpoly.gaussian_center_px
 
         def row(method: str, estimand: str, values: Sequence[float], main: float | None, flags=()):
-            mean = float(np.mean(values)) if values else None
-            median = float(np.median(values)) if values else None
+            mean = float(np.mean(values)) if len(values) else None
+            median = float(np.median(values)) if len(values) else None
             difference = main - baseline if main is not None and baseline is not None else None
             relative = (
                 100.0 * difference / baseline if difference is not None and baseline not in {None, 0.0} else None

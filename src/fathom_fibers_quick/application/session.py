@@ -396,6 +396,8 @@ class ProjectSession:
                 "arithmetic_mean_px": result.arithmetic_mean_px,
                 "median_px": result.median_px,
                 "valid_diameter_count": int(result.local_diameters_px.size),
+                "foreground_fraction": result.foreground_fraction,
+                "skeleton_count": result.skeleton_count,
                 "histogram_counts": result.histogram_counts.tolist(),
                 "histogram_edges": result.histogram_edges.tolist(),
                 "profile": profile,

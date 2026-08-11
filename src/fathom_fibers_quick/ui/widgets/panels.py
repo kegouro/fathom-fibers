@@ -222,6 +222,8 @@ class InspectorPanel(QWidget):
                     ("Arithmetic mean", record.values.get("arithmetic_mean_px")),
                     ("Median", record.values.get("median_px")),
                     ("Valid diameters", record.values.get("valid_diameter_count")),
+                    ("Foreground fraction", record.values.get("foreground_fraction")),
+                    ("Skeleton count", record.values.get("skeleton_count")),
                 ]
             )
         html = "<table>" + "".join(
@@ -412,4 +414,3 @@ class HistoryPanel(QWidget):
     def refresh(self) -> None:
         self.list.clear()
         self.list.addItems(self.session.history.get_log_entries(200))
-

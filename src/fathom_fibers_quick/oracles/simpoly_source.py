@@ -106,6 +106,8 @@ class SIMPolySourceResult:
     reported_center: float | None = None
     reported_stdev: float | None = None
     reported_unit: str = "px"
+    foreground_fraction: float | None = None
+    skeleton_count: int = 0
     flags: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -452,6 +454,8 @@ def run_simpoly_source_pipeline(
         source_stdev = c1_px / 2.0
         math_sigma = c1_px / math.sqrt(2.0)
         status = "OK"
+        if not 10.0 <= center_px <= 100.0:
+            flags.append("SIMPOLY_APPROX_PIXEL_DOMAIN_10_100_EXCEEDED")
     else:
         reported_center = None
         reported_stdev = None
@@ -487,6 +491,8 @@ def run_simpoly_source_pipeline(
         reported_center=reported_center,
         reported_stdev=reported_stdev,
         reported_unit=reported_unit,
+        foreground_fraction=float(BW_thickened.mean()),
+        skeleton_count=int(valid_skel.sum()),
         flags=tuple(flags),
     )
 

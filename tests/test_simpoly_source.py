@@ -133,3 +133,6 @@ def test_pipeline_no_foreground_and_no_skeleton():
 
     res, _inter = run_simpoly_source_pipeline(small_img, cfg)
     assert res.status in {"OK", "NO_FOREGROUND", "NO_SKELETON", "NO_VALID_DIAMETERS"}
+    if res.status == "OK":
+        assert res.foreground_fraction is not None
+        assert res.skeleton_count == res.local_diameters_px.size

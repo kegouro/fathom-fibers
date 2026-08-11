@@ -122,6 +122,22 @@ def test_automatic_result_enters_as_proposed():
     assert not records[0].is_included_in_statistics
 
 
+def test_compare_methods_returns_explicit_estimands():
+    engine = FathomEngine()
+    image = engine.from_array(
+        synthetic_image(), calibration=Calibration(5e-9, 5e-9, "test")
+    )
+
+    comparison = engine.compare_methods(image, roi_bbox=(0, 0, 160, 120))
+
+    assert [row.method for row in comparison.rows] == [
+        "SIMPOLY_CONTROLLED_INPUT",
+        "FATHOM",
+        "MANUAL",
+    ]
+    assert comparison.rows[0].estimand == "SIMPOLY_GAUSSIAN_CENTER"
+
+
 def test_legacy_save_creates_recoverable_backup(tmp_path):
     engine = FathomEngine()
     image = engine.from_array(
