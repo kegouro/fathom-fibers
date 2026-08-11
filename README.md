@@ -1,113 +1,126 @@
-# Fathom Fibers Quick
+# Fathom Fibers
 
-MVP local para medir ancho proyectado de fibras en micrografías SEM. Está optimizado para TIFF Zeiss con metadata `CZ_SEM`, pero también abre TIFF/PNG/JPEG genéricos con calibración manual.
+Fathom Fibers is a scientific desktop workspace and headless Python library for
+projected 2D fiber measurements in microscopy images. It reads Zeiss SEM TIFF
+calibration, supports manual and reviewable assisted workflows, and exposes the
+same scientific engine to the PySide6 application and SPMKit adapter.
 
-## Qué funciona ahora
+> Measurements represent projected 2D geometry. Automatic results enter as
+> `PROPOSED` and are excluded from primary statistics until reviewed.
 
-- verificación e integridad de imagen fuente por SHA-256 (`MATCH`, `MISSING`, `MISMATCH`, `UNVERIFIED`);
-- validación y reconstrucción geométrica de `width_m` al cargar proyectos;
-- gates geométricos de validación para propuestas manuales y asistidas;
-- resumen principal por fibra (`fiber-level summary` basado en medianas por fibra) y secundario por secciones locales;
-- protección contra pérdida de cambios no guardados (dirty state);
-- lectura automática de `ap_image_pixel_size` en TIFF Zeiss;
-- detección y exclusión visual del footer Zeiss;
-- visor con zoom y paneo;
-- medición manual con dos clics;
-- ajuste de bordes (snap asistido) y propuesta local de un clic con puntajes heurísticos;
-- edición de extremos arrastrándolos;
-- clasificación de fibras en 1–4 grupos usando la mediana por fibra;
-- guardado de proyecto JSON con coordenadas, hash y provenance básico;
-- exportación CSV, PNG anotado e informe HTML;
-- CLI para inspeccionar TIFF y crear inventarios de carpetas.
-
-## Qué no afirma todavía
-
-No segmenta automáticamente toda una red densa ni reconstruye fibras ocultas bajo cruces. La propuesta de un clic entrega un puntaje heurístico local (basado en anisotropía de gradientes y perfil de bordes), no una probabilidad calibrada. No se afirma validación científica externa ni oráculo automático. En redes superpuestas, el conteo mostrado corresponde a las IDs de fibra que el operador creó o confirmó.
-
-## Ejecución y verificación rápida
-
-Ejecutar tests desde la raíz:
+## Start in under two minutes
 
 ```bash
-python -m pytest -q
-```
-
-Ejecutar suite completa de calidad:
-
-```bash
-./scripts/check.sh
-```
-
-## Instalación rápida en Arch Linux
-
-```bash
-sudo pacman -S --needed python tk
-./install.sh
-./run.sh
-```
-
-El instalador crea `.venv` e instala las dependencias del proyecto.
-
-También puedes hacerlo manualmente:
-
-```bash
+git clone <repository-url> fathom-fibers
+cd fathom-fibers
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
-python -m fathom_fibers_quick gui
+python -m pip install -e ".[gui]"
+fathom-fibers
 ```
 
-## Protocolo recomendado
+Development setup:
 
-1. Abre el TIFF y comprueba la escala mostrada en el panel izquierdo.
-2. Usa una ID nueva para cada fibra, por ejemplo `F001`.
-3. Realiza entre 3 y 5 secciones limpias y aproximadamente perpendiculares por fibra.
-4. Evita cruces, bordes de imagen y regiones fusionadas. Si son relevantes, márcalos como defecto.
-5. Para máxima confianza usa **Manual 2 clics**.
-6. **Ajustar bordes** toma tus dos clics como aproximación y busca gradientes cercanos.
-7. **Propuesta local 1 clic** estima orientación y bordes. Siempre revísala con la herramienta `V` y arrastra los extremos.
-8. Clasifica únicamente después de medir varias fibras. Los grupos son descriptivos y no prueban por sí solos familias físicas.
-9. Guarda el proyecto y exporta CSV + informe HTML.
+```bash
+python -m pip install -e ".[gui,dev,validation]"
+QT_QPA_PLATFORM=offscreen python -m pytest -q
+```
 
-## Controles
+On Arch Linux, install Python and Qt's common runtime libraries first if needed:
 
-- rueda: zoom;
-- botón derecho y arrastrar: paneo;
-- `V`: seleccionar y editar;
-- `M`: manual, dos clics;
-- `S`: snap asistido, dos clics;
-- `A`: propuesta local, un clic;
-- `Delete`: eliminar seleccionada;
-- `Esc`: cancelar medición pendiente;
-- `Ctrl+O`: abrir imagen;
-- `Ctrl+S`: guardar proyecto.
+```bash
+sudo pacman -S --needed python base-devel libglvnd
+```
+
+The repository launcher uses `.venv`, writes logs below
+`/tmp/fathom-fibers-$USER/`, and can run checks before launch:
+
+```bash
+./scripts/run-fathom.sh
+./scripts/run-fathom.sh --check
+```
+
+## Desktop workflow
+
+The Qt workspace has a project hierarchy, central scientific viewer, inspector,
+and bottom results/history/analysis/comparison panels. The viewer provides wheel
+zoom, pan, fit, 1:1 pixels, coordinates, raw pixel value, physical coordinates,
+scale bar, valid-image body/footer inspection, and non-destructive brightness,
+contrast, gamma and inversion.
+
+Tools and shortcuts:
+
+| Tool/action | Shortcut |
+|---|---|
+| Select | `V` |
+| Pan | `H` or hold `Space` |
+| Projected width | `M` |
+| Distance | `D` |
+| Polyline | `P`, `Enter` to finish |
+| Angle | `G` |
+| Rectangle ROI | `R` |
+| Polygon ROI | `Y`, `Enter` to finish |
+| Intensity profile | `L` |
+| Cancel | `Esc` |
+| Delete | `Delete` |
+| Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` |
+| Fit / 1:1 | `F` / `1` |
+
+See [measurement workflow](docs/measurement-workflow.md) for review rules and
+estimand cautions.
+
+## Headless API
+
+```python
+from fathom_fibers_quick.api import FathomEngine
+
+engine = FathomEngine()
+image = engine.open_image("micrograph.tif")
+
+line = engine.measure(
+    image,
+    "PROJECTED_WIDTH",
+    {"p1": (120.0, 80.0), "p2": (120.0, 112.0)},
+)
+fathom = engine.run_fathom(image, roi_bbox=(100, 60, 500, 460))
+simpoly, intermediates = engine.run_simpoly(
+    image,
+    profile="SIMPOLY_CONTROLLED_INPUT_V1",
+    roi_bbox=(100, 60, 500, 460),
+)
+comparison = engine.compare_methods(image, roi_bbox=(100, 60, 500, 460))
+```
+
+Arrays are supported without filesystem access; calibration is always explicit.
+Full examples and contracts are in [docs/api.md](docs/api.md).
 
 ## CLI
 
-Inspeccionar una imagen:
-
 ```bash
-python -m fathom_fibers_quick inspect "PVDF Jose_01.tif"
+fathom-fibers                         # opens Qt
+fathom-fibers gui [image-or-project]
+fathom-fibers inspect --hash image.tif
+fathom-fibers inventory images/ -o inventory.csv
+fathom-fibers benchmark
 ```
 
-Crear inventario de una carpeta:
+An offscreen-safe shell smoke test is available:
 
 ```bash
-python -m fathom_fibers_quick inventory ./imagenes -o zeiss_inventory.csv
+QT_QPA_PLATFORM=offscreen fathom-fibers gui --smoke-test
 ```
 
-## Estructura científica
+## Scientific scope
 
-Cada medición conserva:
+Fathom preserves Zeiss metadata, anisotropic calibration, measurement geometry,
+protocol snapshots, uncertainty, repeatability, hierarchical statistics,
+provenance, source hashes, autosave, undo/redo and atomic project persistence.
+The source-compatible SIMPoly port retains the source's algorithm order and
+literal decisions, but does not claim exact MATLAB parity for CLAHE, Canny,
+`bwmorph`, skeletonization, automatic histogram binning or nonlinear fitting.
+See [SIMPoly validation profile](docs/validation/simpoly-source-profile.md).
 
-- extremos subpíxel;
-- ancho físico en metros (recalculado y verificado geométricamente);
-- método;
-- fibra asociada;
-- confianza heurística local, cuando aplica;
-- grupo;
-- defecto/observación;
-- aceptación;
-- hash del archivo y calibración en el proyecto/exportación.
-
-La magnitud fundamental es **ancho proyectado en la micrografía 2D**. Interpretarlo como diámetro requiere asumir una fibra aproximadamente cilíndrica, visible, no fusionada y cercana al plano de imagen.
+The old Tk application remains at `fathom_fibers_quick.app` for migration safety;
+the default entrypoint now launches Qt. Scientific code does not import Qt or
+SPMKit. Architecture and remaining limitations are documented in
+[docs/architecture.md](docs/architecture.md).

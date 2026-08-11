@@ -20,3 +20,4 @@ local_results/
 local_data/
 .reference/
 .validation/
+*.zip
