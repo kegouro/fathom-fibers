@@ -18,15 +18,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+gui = ["PySide6>=6.8"]
+validation = ["matplotlib>=3.8"]
+spmkit = ["spmkit>=0.1.5"]
+dev = ["pytest>=8", "pytest-qt>=4.4", "ruff>=0.6"]
 
 [project.scripts]
 fathom-fibers = "fathom_fibers_quick.cli:main"
-fathom-fibers-gui = "fathom_fibers_quick.app:main"
+fathom-fibers-gui = "fathom_fibers_quick.ui.app:main"
 
 
 [project.entry-points."fathom_fibers.plugins.v1"]
 builtin = "fathom_fibers_quick.builtin_plugin:PLUGIN"
+
+[project.entry-points."spmkit.plugins.v1"]
+fathom_fibers = "fathom_fibers_quick.integrations.spmkit:FATHOM_DOMAIN"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -40,5 +46,5 @@ ignore = ["BLE001"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
-
+pythonpath = [".", "src"]
+markers = ["slow: longer deterministic scientific regression"]
