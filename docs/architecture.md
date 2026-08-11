@@ -10,6 +10,12 @@ APPLICATION / USE CASES
 ┌──────────────────────┬──────────────────────┐
 │ Standalone PySide6 UI │ SPMKit adapter       │
 └──────────────────────┴──────────────────────┘
+
+External validation is a sibling adapter, never an upstream core dependency:
+
+```text
+MATLAB R2026a oracle → validation/parity contracts → application/report/Qt review
+```
 ```
 
 `fathom_fibers_quick.core` and the existing scientific modules import neither Qt
@@ -48,6 +54,7 @@ history. Frontends only submit requests and render results.
 | Application | `application/session.py`, `api.py`, `history.py` | Use cases, commands, dirty state, review transitions and headless façade. |
 | Qt | `ui/` | Viewer, tools, overlays, model/view panels, dialogs and background tasks. |
 | Integration | `integrations/spmkit/` | Public SPMKit channel/domain translation only. |
+| Validation adapters | `validation/` | MATLAB process discovery, cache keys, parity metrics, private campaign and review queue. |
 | Legacy | `app.py` | Preserved Tk application, no longer the default entrypoint. |
 
 ## Legacy behavior map
@@ -104,6 +111,7 @@ storage is deferred.
   but their dedicated Qt dialogs have not yet superseded legacy UI.
 - Background cancellation is cooperative at task boundaries; the current numerical
   kernels do not expose fine-grained progress/cancellation callbacks.
-- SIMPoly external MATLAB parity remains unverified at several stages; see its
-  validation profile.
-
+- SIMPoly is now cross-validated against MATLAB R2026a. CLAHE, Canny, complex
+  thickening, `bwskel`, spur, automatic histogram and fitting retain measured
+  divergences; see the validation profile. MATLAB remains optional and never
+  enters `core`, `api.FathomEngine` or SPMKit integration.

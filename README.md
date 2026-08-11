@@ -102,7 +102,16 @@ fathom-fibers gui [image-or-project]
 fathom-fibers inspect --hash image.tif
 fathom-fibers inventory images/ -o inventory.csv
 fathom-fibers benchmark
+fathom-fibers oracle matlab check
+fathom-fibers oracle matlab probe
+fathom-fibers campaign inventory
+fathom-fibers campaign run --methods matlab-simpoly,python-simpoly,fathom --resume
+fathom-fibers campaign report
 ```
+
+MATLAB and the private TIFF corpus are optional validation adapters. The normal
+suite does not require either; licensed runtime tests are enabled explicitly with
+`FATHOM_MATLAB_EXECUTABLE=/path/to/matlab pytest -m matlab`.
 
 An offscreen-safe shell smoke test is available:
 
@@ -116,8 +125,9 @@ Fathom preserves Zeiss metadata, anisotropic calibration, measurement geometry,
 protocol snapshots, uncertainty, repeatability, hierarchical statistics,
 provenance, source hashes, autosave, undo/redo and atomic project persistence.
 The source-compatible SIMPoly port retains the source's algorithm order and
-literal decisions, but does not claim exact MATLAB parity for CLAHE, Canny,
-`bwmorph`, skeletonization, automatic histogram binning or nonlinear fitting.
+literal decisions. R2026a probes establish parity for selected operations, but
+CLAHE, Canny, complex thickening, skeletonization, automatic histogram binning
+and nonlinear fitting are not claimed as exact MATLAB parity.
 See [SIMPoly validation profile](docs/validation/simpoly-source-profile.md).
 
 The old Tk application remains at `fathom_fibers_quick.app` for migration safety;

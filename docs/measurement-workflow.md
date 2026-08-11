@@ -27,3 +27,14 @@ All results describe projected 2D geometry. A projected width becomes a physical
 fiber diameter only under additional geometric/material assumptions that the
 software does not establish.
 
+## Batch Measurement Review
+
+The Qt `BATCH MEASUREMENT REVIEW` tab consumes the frozen
+`ZEISS_PVDF_2026-07-30` manifest and moves through exactly 16 images. Previous,
+Next, Mark Reviewed, Skip and Flag update the review queue. Fathom, Python SIMPoly,
+MATLAB SIMPoly and Compare run through background/application adapters; MATLAB is
+never imported by the scientific core.
+
+`MANUAL_5X5_REFERENCE` presents 25 positions per image. Each cell is recorded as
+`MEASURED`, `NO_VALID_FIBER`, or `SKIPPED_WITH_REASON`. A skip requires a reason;
+the protocol never fabricates a numeric diameter where no defensible section exists.
