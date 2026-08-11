@@ -57,7 +57,10 @@ def _inventory(directory: str, output: str) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="fathom-fibers", description="Fathom Fibers Quick MVP")
+    parser = argparse.ArgumentParser(
+        prog="fathom-fibers",
+        description="Scientific fiber measurement engine and desktop workspace",
+    )
     sub = parser.add_subparsers(dest="command")
 
     gui = sub.add_parser("gui", help="Launch the interactive application")
