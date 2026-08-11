@@ -11,7 +11,7 @@ from fathom_fibers_quick.model import Calibration
 from fathom_fibers_quick.oracles.simpoly_source import PROFILE_CONTROLLED_INPUT_V1
 from fathom_fibers_quick.ui.main_window import MainWindow
 
-pytestmark = pytest.mark.usefixtures("qapp")
+pytestmark = [pytest.mark.qt, pytest.mark.usefixtures("qapp")]
 
 
 def make_session() -> ProjectSession:
@@ -105,3 +105,58 @@ def test_close_cleanly(qtbot):
     window = make_window(qtbot)
     window.close()
     assert not window.isVisible()
+
+
+def test_batch_review_loads_exact_16_case_manifest(qtbot, tmp_path):
+    from fathom_fibers_quick.ui.widgets import BatchReviewPanel
+
+    cases = [
+        {
+            "case_id": f"ZEISS_{index:03d}",
+            "filename": f"image-{index}.tif",
+            "absolute_path": f"/tmp/image-{index}.tif",
+        }
+        for index in range(1, 17)
+    ]
+    manifest = tmp_path / "dataset_manifest.json"
+    manifest.write_text(
+        __import__("json").dumps(
+            {"dataset_id": "ZEISS_PVDF_2026-07-30", "case_count": 16, "cases": cases}
+        ),
+        encoding="utf-8",
+    )
+    panel = BatchReviewPanel()
+    qtbot.addWidget(panel)
+    panel.load_manifest(manifest)
+    assert panel.position.text().startswith("Image 1 / 16")
+    panel.next()
+    assert "ZEISS_002" in panel.position.text()
+    assert panel.current_progress.text() == "Current image measurements: 0 / 25"
+
+
+def test_batch_grid_measurement_records_protocol_provenance(qtbot, tmp_path):
+    window = make_window(qtbot)
+    cases = [
+        {
+            "case_id": f"ZEISS_{index:03d}",
+            "filename": f"image-{index}.tif",
+            "absolute_path": f"/tmp/image-{index}.tif",
+        }
+        for index in range(1, 17)
+    ]
+    manifest = tmp_path / "dataset_manifest.json"
+    manifest.write_text(
+        __import__("json").dumps(
+            {"dataset_id": "ZEISS_PVDF_2026-07-30", "case_count": 16, "cases": cases}
+        ),
+        encoding="utf-8",
+    )
+    window.batch_review_panel.load_manifest(manifest)
+    window.batch_review_panel.grid.setCurrentCell(1, 2)
+    window._create_measurement("PROJECTED_WIDTH", {"p1": (70.0, 55.0), "p2": (70.0, 85.0)})
+    record = window.session.project.records[-1]
+    assert record.protocol_snapshot["protocol_id"] == "MANUAL_5X5_REFERENCE"
+    assert record.protocol_snapshot["grid_position"] == "R2C3"
+    cell = window.batch_review_panel.reviews["ZEISS_001"].cell(1, 2)
+    assert cell.measurement_id == record.measurement_id
+    assert cell.status.value == "MEASURED"

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import csv
+import getpass
+import json
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -9,6 +13,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -28,6 +33,7 @@ from PySide6.QtWidgets import (
 from ...application import ProjectSession
 from ...core.contracts import MethodComparisonResult, ScientificImage
 from ...measurement_records import MeasurementKind, MeasurementRecord, MeasurementStatus
+from ...validation.manual_review import GridCellStatus, Manual5x5Review
 from ..models import MeasurementFilterModel, MeasurementTableModel, ProjectTreeModel
 from ..models.project_tree import ID_ROLE, NODE_ROLE
 
@@ -139,7 +145,9 @@ class ResultsPanel(QWidget):
         self.model.refresh()
 
     def _filter(self, *_args: Any) -> None:
-        self.proxy.set_filters(self.search.text(), self.kind.currentText(), self.status.currentText())
+        self.proxy.set_filters(
+            self.search.text(), self.kind.currentText(), self.status.currentText()
+        )
 
     def selected_ids(self) -> list[str]:
         rows = self.table.selectionModel().selectedRows()
@@ -199,7 +207,10 @@ class InspectorPanel(QWidget):
             ("Geometry", record.geometry),
             ("Value", record.primary_value),
             ("Unit", record.primary_unit),
-            ("Pixel equivalent", record.values.get("length_px", record.values.get("gaussian_center_px"))),
+            (
+                "Pixel equivalent",
+                record.values.get("length_px", record.values.get("gaussian_center_px")),
+            ),
             ("Calibration", record.calibration_snapshot),
             ("Method / source", record.source.value),
             ("Status", record.status.value),
@@ -226,10 +237,14 @@ class InspectorPanel(QWidget):
                     ("Skeleton count", record.values.get("skeleton_count")),
                 ]
             )
-        html = "<table>" + "".join(
-            f"<tr><th align='left' valign='top'>{key}</th><td>{value!s}</td></tr>"
-            for key, value in rows
-        ) + "</table>"
+        html = (
+            "<table>"
+            + "".join(
+                f"<tr><th align='left' valign='top'>{key}</th><td>{value!s}</td></tr>"
+                for key, value in rows
+            )
+            + "</table>"
+        )
         if record.kind == MeasurementKind.DIAMETER_DISTRIBUTION:
             html += (
                 "<p><b>Interpretation:</b> SIMPoly's distribution fit and Fathom's "
@@ -401,6 +416,209 @@ class ComparisonPanel(QWidget):
                     Qt.TransformationMode.SmoothTransformation,
                 )
             )
+
+
+class BatchReviewPanel(QWidget):
+    """Manifest-driven 16-image review UI; external methods remain adapters."""
+
+    imageRequested = Signal(str)
+    runRequested = Signal(str)
+    saveRequested = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.manifest_path: Path | None = None
+        self.queue_path: Path | None = None
+        self.review_path: Path | None = None
+        self.cases: list[dict[str, Any]] = []
+        self.queue: list[dict[str, str]] = []
+        self.index = 0
+        self.reviews: dict[str, Manual5x5Review] = {}
+        self.position = QLabel("No campaign loaded")
+        self.filename = QLabel("—")
+        self.filename.setWordWrap(True)
+        self.global_progress = QLabel("Images reviewed: 0 / 16")
+        self.manual_progress = QLabel("Manual measurements: 0 / 400")
+        self.current_progress = QLabel("Current image measurements: 0 / 25")
+        self.grid = QTableWidget(5, 5)
+        self.grid.setHorizontalHeaderLabels([str(index) for index in range(1, 6)])
+        self.grid.setVerticalHeaderLabels([str(index) for index in range(1, 6)])
+        self.grid.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.grid.cellClicked.connect(self._cycle_cell)
+        self.buttons: dict[str, QPushButton] = {}
+        navigation = QHBoxLayout()
+        for label, callback in (
+            ("Previous", self.previous),
+            ("Next", self.next),
+            ("Mark Reviewed", lambda: self._set_manual_status("REVIEWED")),
+            ("Skip", lambda: self._set_manual_status("SKIPPED")),
+            ("Flag", lambda: self._set_manual_status("FLAGGED")),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(callback)
+            navigation.addWidget(button)
+            self.buttons[label] = button
+        actions = QHBoxLayout()
+        for label, action in (
+            ("Run Fathom", "fathom"),
+            ("Run MATLAB SIMPoly", "matlab"),
+            ("Run Python SIMPoly", "python"),
+            ("Compare", "compare"),
+        ):
+            button = QPushButton(label)
+            button.clicked.connect(
+                lambda _checked=False, value=action: self.runRequested.emit(value)
+            )
+            actions.addWidget(button)
+            self.buttons[label] = button
+        save = QPushButton("Save")
+        save.clicked.connect(self.saveRequested)
+        actions.addWidget(save)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.position)
+        layout.addWidget(self.filename)
+        layout.addLayout(navigation)
+        layout.addLayout(actions)
+        layout.addWidget(self.global_progress)
+        layout.addWidget(self.manual_progress)
+        layout.addWidget(self.current_progress)
+        layout.addWidget(self.grid)
+
+    def load_manifest(self, path: str | Path) -> None:
+        self.manifest_path = Path(path)
+        payload = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        if payload.get("dataset_id") != "ZEISS_PVDF_2026-07-30" or payload.get("case_count") != 16:
+            raise ValueError("Batch Measurement Review requires the frozen 16-image manifest")
+        self.cases = list(payload["cases"])
+        self.queue_path = self.manifest_path.with_name("review_queue.csv")
+        self.review_path = self.manifest_path.with_name("manual_grid.json")
+        if self.queue_path.exists():
+            with self.queue_path.open(newline="", encoding="utf-8") as handle:
+                self.queue = list(csv.DictReader(handle))
+        else:
+            self.queue = [
+                {"case_id": case["case_id"], "manual_status": "NOT_MEASURED"} for case in self.cases
+            ]
+        self.reviews = {case["case_id"]: Manual5x5Review(case["case_id"]) for case in self.cases}
+        if self.review_path.exists():
+            stored = json.loads(self.review_path.read_text(encoding="utf-8"))
+            self.reviews.update(
+                {case_id: Manual5x5Review.from_dict(value) for case_id, value in stored.items()}
+            )
+        self.index = 0
+        self._refresh()
+
+    def current_case(self) -> dict[str, Any] | None:
+        return self.cases[self.index] if self.cases else None
+
+    def active_grid_position(self) -> tuple[int, int] | None:
+        row, column = self.grid.currentRow(), self.grid.currentColumn()
+        return (row, column) if row >= 0 and column >= 0 else None
+
+    def record_measurement(self, record: MeasurementRecord) -> None:
+        case = self.current_case()
+        position = self.active_grid_position()
+        if case is None or position is None:
+            return
+        cell = self.reviews[case["case_id"]].cell(*position)
+        cell.status = GridCellStatus.MEASURED
+        cell.fiber_id = record.fiber_id
+        cell.measurement_id = record.measurement_id
+        cell.geometry = dict(record.geometry)
+        cell.diameter = record.primary_value
+        cell.unit = record.primary_unit
+        cell.calibration_snapshot = dict(record.calibration_snapshot)
+        cell.operator = getpass.getuser()
+        cell.timestamp = record.created_at
+        cell.notes = record.notes
+        self._save_reviews()
+        self._refresh()
+
+    def previous(self) -> None:
+        if self.cases:
+            self.index = max(0, self.index - 1)
+            self._refresh()
+            self._emit_image()
+
+    def next(self) -> None:
+        if self.cases:
+            self.index = min(len(self.cases) - 1, self.index + 1)
+            self._refresh()
+            self._emit_image()
+
+    def _emit_image(self) -> None:
+        case = self.current_case()
+        if case:
+            self.imageRequested.emit(case["absolute_path"])
+
+    def _cycle_cell(self, row: int, column: int) -> None:
+        case = self.current_case()
+        if case is None:
+            return
+        cell = self.reviews[case["case_id"]].cell(row, column)
+        states = (
+            GridCellStatus.NOT_REVIEWED,
+            GridCellStatus.MEASURED,
+            GridCellStatus.NO_VALID_FIBER,
+            GridCellStatus.SKIPPED_WITH_REASON,
+        )
+        next_status = states[(states.index(cell.status) + 1) % len(states)]
+        notes = ""
+        if next_status == GridCellStatus.SKIPPED_WITH_REASON:
+            notes, accepted = QInputDialog.getText(self, "Skip grid position", "Scientific reason:")
+            if not accepted or not notes.strip():
+                return
+        cell.set_status(next_status, notes=notes)
+        self._save_reviews()
+        self._refresh()
+
+    def _set_manual_status(self, status: str) -> None:
+        case = self.current_case()
+        if case is None:
+            return
+        for row in self.queue:
+            if row.get("case_id") == case["case_id"]:
+                row["manual_status"] = status
+                break
+        self._save_queue()
+        self._refresh()
+
+    def _save_queue(self) -> None:
+        if self.queue_path is None or not self.queue:
+            return
+        with self.queue_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(self.queue[0]))
+            writer.writeheader()
+            writer.writerows(self.queue)
+
+    def _save_reviews(self) -> None:
+        if self.review_path is None:
+            return
+        payload = {case_id: review.to_dict() for case_id, review in self.reviews.items()}
+        temporary = self.review_path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temporary.replace(self.review_path)
+
+    def _refresh(self) -> None:
+        case = self.current_case()
+        if case is None:
+            return
+        review = self.reviews[case["case_id"]]
+        self.position.setText(f"Image {self.index + 1} / {len(self.cases)} — {case['case_id']}")
+        self.filename.setText(case["filename"])
+        reviewed = sum(row.get("manual_status") in {"REVIEWED", "SKIPPED"} for row in self.queue)
+        total_measured = sum(item.measurement_count for item in self.reviews.values())
+        self.global_progress.setText(f"Images reviewed: {reviewed} / 16")
+        self.manual_progress.setText(f"Manual measurements: {total_measured} / 400")
+        self.current_progress.setText(
+            f"Current image measurements: {review.measurement_count} / 25"
+        )
+        for row in range(5):
+            for column in range(5):
+                status = review.cell(row, column).status.value
+                self.grid.setItem(
+                    row, column, QTableWidgetItem(status.replace("NOT_REVIEWED", "—"))
+                )
 
 
 class HistoryPanel(QWidget):

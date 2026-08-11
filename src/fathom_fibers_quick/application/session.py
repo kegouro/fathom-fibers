@@ -190,7 +190,9 @@ class ProjectSession:
             self.selected_record_id = record.measurement_id
 
         def undo() -> None:
-            project.records = [r for r in project.records if r.measurement_id != record.measurement_id]
+            project.records = [
+                r for r in project.records if r.measurement_id != record.measurement_id
+            ]
             if self.selected_record_id == record.measurement_id:
                 self.selected_record_id = None
 
@@ -231,7 +233,8 @@ class ProjectSession:
             source=source,
             image_id=image.image_id,
             sample_id=project.sample_id,
-            fiber_id=fiber_id or (project.active_fiber_id if kind == MeasurementKind.PROJECTED_WIDTH else None),
+            fiber_id=fiber_id
+            or (project.active_fiber_id if kind == MeasurementKind.PROJECTED_WIDTH else None),
             geometry=dict(result.geometry),
             values=dict(result.values),
             calibration_snapshot=asdict(image.calibration),
@@ -271,7 +274,10 @@ class ProjectSession:
         if unknown:
             raise ValueError(f"Derived or unsupported fields are read-only: {sorted(unknown)}")
         records = [r for r in project.records if r.measurement_id in set(record_ids)]
-        old = {r.measurement_id: {key: copy.deepcopy(getattr(r, key)) for key in changes} for r in records}
+        old = {
+            r.measurement_id: {key: copy.deepcopy(getattr(r, key)) for key in changes}
+            for r in records
+        }
         normalized = dict(changes)
         if "tags" in normalized:
             normalized["tags"] = normalize_tags(normalized["tags"])
@@ -289,7 +295,41 @@ class ProjectSession:
                 for key, value in old[record.measurement_id].items():
                     setattr(record, key, copy.deepcopy(value))
 
-        self._push(Command(f"Edit metadata ({len(records)})", execute, undo, affected_ids=record_ids))
+        self._push(
+            Command(f"Edit metadata ({len(records)})", execute, undo, affected_ids=record_ids)
+        )
+
+    def annotate_manual_grid(self, record_id: str, *, case_id: str, grid_position: str) -> None:
+        """Attach MANUAL_5X5_REFERENCE provenance through an undoable command."""
+        project, _image = self._require()
+        record = next(item for item in project.records if item.measurement_id == record_id)
+        old = {
+            "tags": copy.deepcopy(record.tags),
+            "notes": record.notes,
+            "protocol_snapshot": copy.deepcopy(record.protocol_snapshot),
+        }
+        protocol = BUILTIN_PROTOCOLS["MANUAL_5X5_REFERENCE"].to_dict()
+
+        def execute() -> None:
+            record.tags = normalize_tags([*record.tags, case_id, grid_position])
+            record.notes = f"{record.notes}\n{case_id} {grid_position}".strip()
+            record.protocol_snapshot = {
+                **protocol,
+                "case_id": case_id,
+                "grid_position": grid_position,
+            }
+            record.updated_at = datetime.now(UTC).isoformat()
+
+        def undo() -> None:
+            record.tags = old["tags"]
+            record.notes = old["notes"]
+            record.protocol_snapshot = old["protocol_snapshot"]
+
+        self._push(
+            Command(
+                f"Assign {grid_position} to {record_id}", execute, undo, affected_ids=[record_id]
+            )
+        )
 
     def delete_records(self, record_ids: list[str]) -> None:
         project, _image = self._require()
@@ -305,7 +345,9 @@ class ProjectSession:
             for index, record in indexed:
                 project.records.insert(min(index, len(project.records)), record)
 
-        self._push(Command(f"Delete {len(indexed)} records", execute, undo, affected_ids=record_ids))
+        self._push(
+            Command(f"Delete {len(indexed)} records", execute, undo, affected_ids=record_ids)
+        )
 
     def apply_fathom_result(self, result: FathomAnalysisResult) -> list[MeasurementRecord]:
         project, image = self._require()
@@ -329,7 +371,9 @@ class ProjectSession:
                         calibration_snapshot=asdict(image.calibration),
                         quality_flags=sorted(candidate.quality_flags | proposal.quality_flags),
                         confidence=candidate.confidence_score,
-                        protocol_snapshot=dict(project.protocols.get(project.active_protocol_id, {})),
+                        protocol_snapshot=dict(
+                            project.protocols.get(project.active_protocol_id, {})
+                        ),
                     )
                 )
         if not records:
@@ -350,7 +394,9 @@ class ProjectSession:
         def undo() -> None:
             ids = {r.measurement_id for r in records}
             project.records = [r for r in project.records if r.measurement_id not in ids]
-            project.analysis_runs = [run for run in project.analysis_runs if run.get("record_ids") != list(ids)]
+            project.analysis_runs = [
+                run for run in project.analysis_runs if run.get("record_ids") != list(ids)
+            ]
 
         self._push(
             Command(
@@ -377,7 +423,9 @@ class ProjectSession:
             if profile == PROFILE_SOURCE_COMPAT_V1
             else MeasurementSource.SIMPOLY_CONTROLLED_INPUT
         )
-        center_m = result.gaussian_center_px * scale if result.gaussian_center_px is not None else None
+        center_m = (
+            result.gaussian_center_px * scale if result.gaussian_center_px is not None else None
+        )
         record = MeasurementRecord(
             measurement_id=measurement_id,
             kind=MeasurementKind.DIAMETER_DISTRIBUTION,

@@ -32,7 +32,14 @@ from ..oracles.simpoly_source import PROFILE_CONTROLLED_INPUT_V1, PROFILE_SOURCE
 from ..project_io import SourceVerificationStatus, verify_project_source
 from .commands import HistoryBridge
 from .tasks import AnalysisTask
-from .widgets import AnalysisPanel, ComparisonPanel, InspectorPanel, ProjectPanel, ResultsPanel
+from .widgets import (
+    AnalysisPanel,
+    BatchReviewPanel,
+    ComparisonPanel,
+    InspectorPanel,
+    ProjectPanel,
+    ResultsPanel,
+)
 from .widgets.image_viewer import ScientificImageView
 from .widgets.panels import HistoryPanel
 
@@ -68,6 +75,7 @@ class MainWindow(QMainWindow):
         self.inspector_panel = InspectorPanel()
         self.analysis_panel = AnalysisPanel()
         self.comparison_panel = ComparisonPanel()
+        self.batch_review_panel = BatchReviewPanel()
         self.history_panel = HistoryPanel(self.session)
         self._build_docks()
         self._build_actions()
@@ -76,6 +84,12 @@ class MainWindow(QMainWindow):
         self._wire()
         self._start_autosave_timer()
         self._refresh_all()
+        campaign_manifest = Path.cwd() / ".validation/real-tiff-campaign/dataset_manifest.json"
+        if campaign_manifest.exists():
+            try:
+                self.batch_review_panel.load_manifest(campaign_manifest)
+            except Exception:
+                logger.exception("Could not load local batch review manifest")
 
         if initial_path:
             QTimer.singleShot(0, lambda: self.open_path(initial_path))
@@ -99,6 +113,7 @@ class MainWindow(QMainWindow):
         bottom_tabs.addTab(self.history_panel, "HISTORY")
         bottom_tabs.addTab(self.analysis_panel, "ANALYSIS")
         bottom_tabs.addTab(self.comparison_panel, "COMPARE METHODS")
+        bottom_tabs.addTab(self.batch_review_panel, "BATCH MEASUREMENT REVIEW")
         self.bottom_tabs = bottom_tabs
         bottom_dock = QDockWidget("RESULTS / HISTORY / ANALYSIS", self)
         bottom_dock.setObjectName("resultsDock")
@@ -249,6 +264,9 @@ class MainWindow(QMainWindow):
         self.analysis_panel.runRequested.connect(self._run_analysis)
         self.analysis_panel.cancelRequested.connect(self._cancel_task)
         self.comparison_panel.runRequested.connect(self._run_comparison)
+        self.batch_review_panel.imageRequested.connect(self.open_path)
+        self.batch_review_panel.runRequested.connect(self._run_batch_action)
+        self.batch_review_panel.saveRequested.connect(self.save_project)
         self.history_bridge.stateChanged.connect(self._history_state)
         self.brightness_slider.valueChanged.connect(self._display_changed)
         self.contrast_slider.valueChanged.connect(self._display_changed)
@@ -464,6 +482,14 @@ class MainWindow(QMainWindow):
     def _create_measurement(self, kind: str, geometry: dict[str, Any]) -> None:
         try:
             record = self.session.create_measurement(kind, geometry)
+            case = self.batch_review_panel.current_case()
+            grid = self.batch_review_panel.active_grid_position()
+            if kind == "PROJECTED_WIDTH" and case is not None and grid is not None:
+                position = f"R{grid[0] + 1}C{grid[1] + 1}"
+                self.session.annotate_manual_grid(
+                    record.measurement_id, case_id=case["case_id"], grid_position=position
+                )
+                self.batch_review_panel.record_measurement(record)
             self.statusBar().showMessage(f"Created {record.measurement_id}", 3000)
         except Exception as exc:
             logger.exception("Measurement creation failed")
@@ -540,6 +566,52 @@ class MainWindow(QMainWindow):
         if self.session.image is not None:
             self.comparison_panel.set_result(result, self.session.image)
         self.analysis_panel.set_running(False, "Method comparison complete")
+
+    def _run_batch_action(self, action: str) -> None:
+        if action == "fathom":
+            self._run_analysis("Fathom Assisted ROI")
+        elif action == "python":
+            self._run_analysis("SIMPoly Controlled Input")
+        elif action == "compare":
+            self._run_comparison()
+        elif action == "matlab":
+            self._run_matlab_current()
+
+    def _run_matlab_current(self) -> None:
+        if self.session.image is None or self.active_task is not None:
+            return
+        source = self.session.image.source_path
+        if not source:
+            self.statusBar().showMessage("MATLAB oracle requires a file-backed image", 7000)
+            return
+
+        def run_external_oracle() -> dict[str, Any]:
+            from ..validation.matlab_oracle import MatlabOracle
+
+            repo = Path.cwd().resolve()
+            oracle = MatlabOracle.discover(repo)
+            if oracle is None:
+                raise RuntimeError("MATLAB executable is unavailable")
+            case = self.batch_review_panel.current_case()
+            case_id = case["case_id"] if case else Path(source).stem
+            output = repo / ".validation/matlab-oracle/ui-runs" / case_id
+            harness = oracle.harness_dir.as_posix().replace("'", "''")
+            image = Path(source).resolve().as_posix().replace("'", "''")
+            expression = (
+                f"addpath('{harness}');run_simpoly_case('{image}','SOURCE_COMPAT',[],"
+                f"'{output.as_posix()}',false);"
+            )
+            completed = oracle.batch(expression, timeout=1800)
+            if completed.returncode:
+                raise RuntimeError(completed.stderr or completed.stdout)
+            return {"case_id": case_id, "summary": str(output / "summary.json")}
+
+        self._start_task(run_external_oracle, self._matlab_batch_done)
+
+    def _matlab_batch_done(self, result: dict[str, Any]) -> None:
+        message = f"MATLAB SIMPoly complete for {result['case_id']}"
+        self.analysis_panel.set_running(False, message)
+        self.statusBar().showMessage(f"{message}; {result['summary']}", 9000)
 
     def _start_task(self, function, on_result) -> None:
         task = AnalysisTask(function)

@@ -1,8 +1,16 @@
 from .image_viewer import ScientificImageView
-from .panels import AnalysisPanel, ComparisonPanel, InspectorPanel, ProjectPanel, ResultsPanel
+from .panels import (
+    AnalysisPanel,
+    BatchReviewPanel,
+    ComparisonPanel,
+    InspectorPanel,
+    ProjectPanel,
+    ResultsPanel,
+)
 
 __all__ = [
     "AnalysisPanel",
+    "BatchReviewPanel",
     "ComparisonPanel",
     "InspectorPanel",
     "ProjectPanel",

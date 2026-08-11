@@ -36,14 +36,18 @@ class MeasurementProtocol:
             "protocol_id": self.protocol_id,
             "name": self.name,
             "description": self.description,
-            "measurement_kind": self.measurement_kind.value if hasattr(self.measurement_kind, "value") else str(self.measurement_kind),
+            "measurement_kind": self.measurement_kind.value
+            if hasattr(self.measurement_kind, "value")
+            else str(self.measurement_kind),
             "sections_per_fiber": self.sections_per_fiber,
             "minimum_fibers_per_image": self.minimum_fibers_per_image,
             "exclude_crossings": self.exclude_crossings,
             "exclude_image_edges": self.exclude_image_edges,
             "exclude_invalid_mask": self.exclude_invalid_mask,
             "minimum_resolved_width_px": self.minimum_resolved_width_px,
-            "allowed_statuses": [st.value if hasattr(st, "value") else str(st) for st in self.allowed_statuses],
+            "allowed_statuses": [
+                st.value if hasattr(st, "value") else str(st) for st in self.allowed_statuses
+            ],
             "required_tags": list(self.required_tags),
             "notes_template": self.notes_template,
             "created_at": self.created_at,
@@ -147,6 +151,19 @@ PRESET_SIMPOLY_MANUAL_5X5 = MeasurementProtocol(
     notes_template="SIMPoly 5x5 position {position_idx}",
 )
 
+PRESET_MANUAL_5X5_REFERENCE = MeasurementProtocol(
+    protocol_id="MANUAL_5X5_REFERENCE",
+    name="Manual 5×5 reference",
+    description=(
+        "Reference grid with 25 review positions. Each cell is recorded as MEASURED, "
+        "NO_VALID_FIBER, or SKIPPED_WITH_REASON; 25 numeric values are not forced."
+    ),
+    sections_per_fiber=1,
+    minimum_fibers_per_image=0,
+    minimum_resolved_width_px=2.5,
+    notes_template="MANUAL_5X5_REFERENCE {grid_position}",
+)
+
 BUILTIN_PROTOCOLS: dict[str, MeasurementProtocol] = {
     p.protocol_id: p
     for p in [
@@ -155,5 +172,6 @@ BUILTIN_PROTOCOLS: dict[str, MeasurementProtocol] = {
         PRESET_GENERAL_MICROSCOPY,
         PRESET_BLIND_REPEATABILITY,
         PRESET_SIMPOLY_MANUAL_5X5,
+        PRESET_MANUAL_5X5_REFERENCE,
     ]
 }
