@@ -82,7 +82,9 @@ def _comparison_payload(report: ImageMorphologyReport) -> dict[str, Any]:
     comparison = report.comparison
     field = next((result for result in comparison.results if result.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None)
     edge = field.secondary_distributions.get("FATHOM_FIELD_PAIRED_EDGE_DIAMETER") if field else None
+    profile = field.secondary_distributions.get("FATHOM_FIELD_PROFILE_DIAMETER") if field else None
     edge_agreements: dict[str, dict[str, float | None]] = {}
+    profile_agreements: dict[str, dict[str, float | None]] = {}
     if edge is not None:
         for other in comparison.results:
             distribution = other.common_distribution
@@ -93,6 +95,24 @@ def _comparison_payload(report: ImageMorphologyReport) -> dict[str, Any]:
             edge_agreements[other.method_id.value] = {
                 "wasserstein_1": float(stats.wasserstein_distance(edge.diameter, distribution.diameter, edge.weight, distribution.weight)),
                 "median_difference": edge_summary.weighted_median - other_summary.weighted_median,
+            }
+    if profile is not None:
+        for other in comparison.results:
+            distribution = other.common_distribution
+            if distribution is None or not distribution.diameter.size:
+                continue
+            profile_summary = summarize_distribution(profile)
+            other_summary = summarize_distribution(distribution)
+            profile_agreements[other.method_id.value] = {
+                "wasserstein_1": float(stats.wasserstein_distance(profile.diameter, distribution.diameter, profile.weight, distribution.weight)),
+                "median_difference": profile_summary.weighted_median - other_summary.weighted_median,
+            }
+        if edge is not None:
+            edge_summary = summarize_distribution(edge)
+            profile_summary = summarize_distribution(profile)
+            profile_agreements["FATHOM_FIELD_PAIRED_EDGE_DIAMETER"] = {
+                "wasserstein_1": float(stats.wasserstein_distance(profile.diameter, edge.diameter, profile.weight, edge.weight)),
+                "median_difference": profile_summary.weighted_median - edge_summary.weighted_median,
             }
     return {
         "image_id": report.image_id,
@@ -107,6 +127,7 @@ def _comparison_payload(report: ImageMorphologyReport) -> dict[str, Any]:
         },
         "limitations": list(report.limitations),
         "field_edge_agreements": edge_agreements,
+        "field_profile_agreements": profile_agreements,
     }
 
 
@@ -174,14 +195,19 @@ def _load_cached_payloads(repo: Path) -> list[dict[str, Any]]:
     return [json.loads(path.read_text()) for path in sorted((_root(repo) / "runs").glob("*.json"))]
 
 
-def _image_balanced_samples(payloads: list[dict[str, Any]], method_id: str) -> tuple[np.ndarray, np.ndarray]:
+def _image_balanced_samples(
+    payloads: list[dict[str, Any]], method_id: str, secondary_name: str | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     # V1 plot aggregate: each image contributes total weight one, avoiding
     # domination by a skeleton-rich image. This is display-only, not a new estimand.
     values: list[float] = []
     weights: list[float] = []
     for payload in payloads:
         result = next((entry for entry in payload.get("results", []) if entry["method_id"] == method_id), None)
-        distribution = result and result.get("common_distribution")
+        distribution = (
+            result and result.get("common_distribution") if secondary_name is None
+            else result and result.get("secondary_distributions", {}).get(secondary_name)
+        )
         if not distribution or not distribution.get("n"):
             continue
         # Per-image quantile summaries are all that the on-disk report retains.
@@ -228,6 +254,19 @@ def generate_unified_report(repo: Path) -> Path:
     figure.savefig(plot, dpi=150)
     plt.close(figure)
 
+    figure, axis = plt.subplots(figsize=(8, 4.5))
+    for name, color in (("FATHOM_FIELD_PAIRED_EDGE_DIAMETER", "#d95f02"), ("FATHOM_FIELD_PROFILE_DIAMETER", "#1b9e77")):
+        x, w = _image_balanced_samples(payloads, MethodId.FATHOM_FIELD_GRAPH_V1.value, name)
+        if x.size:
+            order = np.argsort(x)
+            axis.step(x[order], np.cumsum(w[order]) / w.sum(), where="post", label=name, color=color)
+    axis.set(xlabel="Diameter (µm)", ylabel="Image-balanced ECDF", title="Field secondary estimators")
+    axis.legend()
+    axis.grid(alpha=.2)
+    figure.tight_layout()
+    figure.savefig(output / "field-secondary-ecdf.png", dpi=150)
+    plt.close(figure)
+
     wasserstein_matrix: dict[tuple[str, str], list[float]] = {}
     median_difference_matrix: dict[tuple[str, str], list[float]] = {}
     for payload in payloads:
@@ -253,6 +292,7 @@ def generate_unified_report(repo: Path) -> Path:
     image_rows = []
     field_rows = []
     edge_rows = []
+    profile_rows = []
     for payload in payloads:
         statuses = ", ".join(f"{entry['method_id']}: {entry['status']}" for entry in payload.get("results", []))
         consensus = payload.get("consensus", {})
@@ -260,6 +300,7 @@ def generate_unified_report(repo: Path) -> Path:
         field = next((entry for entry in payload.get("results", []) if entry["method_id"] == MethodId.FATHOM_FIELD_GRAPH_V1.value), None)
         stats = field.get("native_statistics", {}) if field else {}
         edge = (field.get("secondary_distributions") or {}).get("FATHOM_FIELD_PAIRED_EDGE_DIAMETER") if field else None
+        profile = (field.get("secondary_distributions") or {}).get("FATHOM_FIELD_PROFILE_DIAMETER") if field else None
         coherence = stats.get("mean_coherence")
         nematic = stats.get("nematic_order_parameter")
         coherence_text = "—" if coherence is None else f"{coherence:.4g}"
@@ -282,6 +323,21 @@ def generate_unified_report(repo: Path) -> Path:
             f"<td>{stats.get('edge_accepted_count', '—')}</td><td>{acceptance_text}</td>"
             f"<td>{asymmetry_text}</td><td>{edge_median}</td><td>{edge_edt_text}</td></tr>"
         )
+        profile_agreement = payload.get("field_profile_agreements", {})
+        profile_acceptance = stats.get("profile_acceptance_fraction")
+        profile_edge_shift = stats.get("profile_median_abs_edge_shift_um")
+        profile_center_shift = stats.get("profile_median_center_shift_um")
+        profile_acceptance_text = "—" if profile_acceptance is None else f"{profile_acceptance:.2%}"
+        profile_edge_shift_text = "—" if profile_edge_shift is None else f"{profile_edge_shift:.4g}"
+        profile_center_shift_text = "—" if profile_center_shift is None else f"{profile_center_shift:.4g}"
+        profile_median_text = "—" if profile is None else f"{profile['median']:.6g}"
+        profile_edge = profile_agreement.get("FATHOM_FIELD_PAIRED_EDGE_DIAMETER")
+        profile_edge_text = "—" if profile_edge is None else f"{profile_edge['wasserstein_1']:.6g}"
+        profile_rows.append(
+            f"<tr><td>{html.escape(payload.get('image_id', 'unknown'))}</td><td>{stats.get('profile_accepted_count', '—')}</td>"
+            f"<td>{profile_acceptance_text}</td><td>{profile_median_text}</td>"
+            f"<td>{profile_edge_shift_text}</td><td>{profile_center_shift_text}</td><td>{profile_edge_text}</td></tr>"
+        )
     index = output / "index.html"
     index.write_text(f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Unified Method Comparison</title>
 <style>body{{font:14px system-ui,sans-serif;margin:2rem;color:#20242a}}table{{border-collapse:collapse;width:100%;margin:1rem 0}}th,td{{border:1px solid #ccd2d8;padding:.4rem;text-align:left}}th{{background:#eef1f4}}.note{{border-left:4px solid #b7791f;background:#fff9e6;padding:.7rem}}</style></head><body>
@@ -293,6 +349,8 @@ def generate_unified_report(repo: Path) -> Path:
 <h2>16-image processing matrix</h2><table><tr><th>Image</th><th>Method states</th><th>Consensus participants</th></tr>{''.join(image_rows)}</table>
 <h2>Field diagnostics</h2><table><tr><th>Image</th><th>Status</th><th>N samples</th><th>Mean coherence</th><th>Nematic S</th><th>Centerline source</th></tr>{''.join(field_rows)}</table>
 <h2>Paired-edge diagnostics (experimental)</h2><table><tr><th>Image</th><th>N raw</th><th>N accepted</th><th>Acceptance</th><th>Median asymmetry</th><th>Edge median µm</th><th>W1 Edge ↔ EDT µm</th></tr>{''.join(edge_rows)}</table>
+<h2>Intensity-profile diagnostics (experimental)</h2><table><tr><th>Image</th><th>N accepted</th><th>Acceptance</th><th>Profile median µm</th><th>Median |edge shift| µm</th><th>Median suggested center shift µm</th><th>W1 Profile ↔ Edge µm</th></tr>{''.join(profile_rows)}</table>
+<img src='field-secondary-ecdf.png' alt='Edge and profile ECDF comparison'>
 <h2>Method limitations</h2><ul><li>Measurements represent projected 2-D geometry.</li><li>FATHOM_FIELD_GRAPH_V1 implements a field stage only: orientation and mask-derived EDT diameters are sampled on an explicit skeleton baseline. Graph, topology, crossing resolution and fibre instances are unavailable.</li><li>Manual 5×5 remains <code>NOT_MEASURED</code> until actual accepted records exist.</li><li>Dataset display balances images; it does not blindly pool skeleton samples.</li></ul>
 </body></html>""", encoding="utf-8")
     return index

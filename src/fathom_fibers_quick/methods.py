@@ -12,9 +12,10 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from scipy.io import loadmat
+from scipy.stats import spearmanr
 
 from .core.contracts import ScientificImage
-from .core.fiber_field import ClassicalFiberField, OrientedBoundaryEngine
+from .core.fiber_field import ClassicalFiberField, IntensityProfileSampler, OrientedBoundaryEngine
 from .core.methods import (
     Capability,
     CapabilityState,
@@ -64,6 +65,14 @@ def _length_weights(mask: np.ndarray, calibration_x_m: float, calibration_y_m: f
                 total += 0.5 * float(np.hypot(dx * calibration_x_m, dy * calibration_y_m))
         weights[index] = total or min(calibration_x_m, calibration_y_m)
     return weights
+
+
+def _spearman(left: np.ndarray, right: np.ndarray) -> float | None:
+    valid = np.isfinite(left) & np.isfinite(right)
+    if np.sum(valid) < 3:
+        return None
+    value = float(spearmanr(left[valid], right[valid]).statistic)
+    return value if np.isfinite(value) else None
 
 
 def _simply_capabilities(*, matlab: bool) -> MethodCapabilities:
@@ -241,6 +250,9 @@ def classical_field_adapter(
         pixel_size_xy_m=(image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m),
         contours=contours,
     )
+    profile = IntensityProfileSampler().refine(
+        body, paired, pixel_size_xy_m=(image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m)
+    )
     centerline = np.asarray(output.centerline, dtype=bool)
     rows, cols = np.nonzero(centerline)
     weights_m = _length_weights(centerline, image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m)
@@ -265,6 +277,19 @@ def classical_field_adapter(
             Estimand.FATHOM_FIELD_PAIRED_EDGE_DIAMETER, MethodId.FATHOM_FIELD_GRAPH_V1,
         ) if np.any(edge_accepted) else None
     )
+    profile_accepted = np.asarray(profile.accepted, bool)[valid]
+    profile_diameter_um = np.asarray(profile.diameter_m, float)[valid] * 1e6
+    profile_distribution = (
+        DiameterDistribution(
+            profile_diameter_um[profile_accepted], weights_m[profile_accepted], "um",
+            Estimand.FATHOM_FIELD_PROFILE_DIAMETER, MethodId.FATHOM_FIELD_GRAPH_V1,
+        ) if np.any(profile_accepted) else None
+    )
+    d_min = np.asarray(paired.d_min_from_edges_m, float)[valid]
+    imbalance = np.asarray(paired.absolute_side_imbalance_m, float)[valid]
+    edge_minus_edt = edge_diameter_um * 1e-6 - np.asarray(output.diameter_m, float)[centerline][valid]
+    edt_minus_dmin = np.asarray(output.diameter_m, float)[centerline][valid] - d_min
+    profile_minus_edge = profile.diameter_m[valid] - edge_diameter_um * 1e-6
     native = common
     vector_x = float(np.average(qx, weights=weights_m)) if weights_m.size else 0.0
     vector_y = float(np.average(qy, weights=weights_m)) if weights_m.size else 0.0
@@ -308,11 +333,30 @@ def classical_field_adapter(
             "edge_mean_tangent_alignment": float(np.nanmean(paired.tangent_alignment[valid])) if np.any(np.isfinite(paired.tangent_alignment[valid])) else None,
             "edge_mean_normal_consistency": float(np.nanmean(paired.boundary_normal_consistency[valid])) if np.any(np.isfinite(paired.boundary_normal_consistency[valid])) else None,
             "edge_flag_counts": {flag: sum(flag in sample for sample in paired.flags) for flag in sorted({flag for sample in paired.flags for flag in sample})},
+            "centering_median_absolute_imbalance_um": float(np.nanmedian(imbalance) * 1e6),
+            "centering_p90_absolute_imbalance_um": float(np.nanquantile(imbalance, .9) * 1e6),
+            "centering_median_edge_minus_edt_um": float(np.nanmedian(edge_minus_edt) * 1e6),
+            "centering_median_edt_minus_dmin_um": float(np.nanmedian(edt_minus_dmin) * 1e6),
+            "exploratory_spearman_imbalance_vs_edge_minus_edt": _spearman(imbalance, edge_minus_edt),
+            "exploratory_spearman_coherence_vs_abs_edge_minus_edt": _spearman(coherence, np.abs(edge_minus_edt)),
+            "profile_accepted_count": int(np.sum(profile_accepted)),
+            "profile_acceptance_fraction": float(np.mean(profile_accepted)) if profile_accepted.size else None,
+            "profile_median_abs_edge_shift_um": float(np.nanmedian(np.abs(np.concatenate((profile.minus_shift_m[valid], profile.plus_shift_m[valid])))) * 1e6),
+            "profile_median_center_shift_um": float(np.nanmedian(np.abs(profile.suggested_center_shift_m[valid])) * 1e6),
+            "profile_flag_counts": {flag: sum(flag in sample for sample in profile.flags) for flag in sorted({flag for sample in profile.flags for flag in sample})},
+            "exploratory_spearman_abs_profile_shift_vs_profile_minus_edge": _spearman(
+                np.maximum(np.abs(profile.minus_shift_m[valid]), np.abs(profile.plus_shift_m[valid])), profile_minus_edge
+            ),
             "boundary_contour_count": len(contours),
         },
         native,
         common,
-        secondary_distributions={"FATHOM_FIELD_PAIRED_EDGE_DIAMETER": edge_distribution} if edge_distribution else {},
+        secondary_distributions={
+            name: distribution for name, distribution in {
+                "FATHOM_FIELD_PAIRED_EDGE_DIAMETER": edge_distribution,
+                "FATHOM_FIELD_PROFILE_DIAMETER": profile_distribution,
+            }.items() if distribution is not None
+        },
         mask=binary,
         centerline=centerline,
         orientation_field=(np.asarray(output.orientation_qx), np.asarray(output.orientation_qy)),
@@ -331,6 +375,17 @@ def classical_field_adapter(
             "edge_accepted": edge_accepted,
             "edge_tangent_alignment": paired.tangent_alignment[valid],
             "edge_normal_consistency": paired.boundary_normal_consistency[valid],
+            "d_min_from_edges_um": d_min * 1e6,
+            "edge_minus_dmin_um": imbalance * 1e6,
+            "edt_minus_dmin_um": edt_minus_dmin * 1e6,
+            "edge_minus_edt_um": edge_minus_edt * 1e6,
+            "profile_diameter_um": profile_diameter_um,
+            "profile_accepted": profile_accepted,
+            "profile_minus_edge_um": profile_minus_edge * 1e6,
+            "profile_minus_shift_um": profile.minus_shift_m[valid] * 1e6,
+            "profile_plus_shift_um": profile.plus_shift_m[valid] * 1e6,
+            "profile_gradient_snr": profile.gradient_snr[valid],
+            "suggested_center_shift_um": profile.suggested_center_shift_m[valid] * 1e6,
         },
         quality_flags=tuple(flags), confidence=mean_coherence,
         runtime_seconds=time.monotonic() - started,
@@ -352,6 +407,8 @@ def classical_field_adapter(
                 "high_asymmetry": boundary_engine.high_asymmetry,
                 "minimum_tangent_alignment": boundary_engine.minimum_tangent_alignment,
             },
+            "profile_input": "RAW_SCIENTIFIC_SEM_BODY",
+            "profile_sampler": "LINEAR_SUBPIXEL_NORMAL_PROFILE_PARABOLIC_GRADIENT_PEAK_V1",
             "sampling_weights": "half_edge_physical_length_on_8_connected_centerline",
             "cache_key": method_cache_key(image_sha256=image.source_sha256, valid_roi=roi, calibration=_calibration(image), method_id=MethodId.FATHOM_FIELD_GRAPH_V1, method_version="CLASSICAL_FIBER_FIELD_V1", parameters=dict(output.metadata)),
         },

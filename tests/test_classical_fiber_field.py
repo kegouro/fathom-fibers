@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy import ndimage
 
 from fathom_fibers_quick.core.fiber_field import (
     ClassicalFiberField,
+    IntensityProfileSampler,
     OrientedBoundaryEngine,
     double_angle_orientation,
 )
@@ -123,3 +125,38 @@ def test_crossing_marks_ambiguous_or_abstains_from_paired_widths():
     )
     center = np.argmin(np.sum((paired.center_xy_m - np.array([50.0, 50.0])) ** 2, axis=1))
     assert not paired.accepted[center] or "AMBIGUOUS_LOCAL_WIDTH" in paired.flags[center]
+
+
+def test_paired_edge_bias_identity_and_profile_recovers_blurred_truth_width():
+    mask = np.zeros((100, 140), dtype=bool)
+    mask[40:60, 15:125] = True
+    image = ndimage.gaussian_filter(mask.astype(float), sigma=1.2)
+    field = _field(mask)
+    paired = OrientedBoundaryEngine(low_coherence=0.0, high_asymmetry=0.8).pair_centerline(
+        mask=mask, centerline=field.centerline, orientation_qx=field.orientation_qx,
+        orientation_qy=field.orientation_qy, coherence=field.coherence,
+        edt_diameter_m=field.diameter_m, pixel_size_xy_m=(1.0, 1.0),
+    )
+    finite = paired.accepted
+    assert np.allclose(
+        paired.diameter_m[finite] - paired.d_min_from_edges_m[finite],
+        paired.absolute_side_imbalance_m[finite],
+    )
+    profile = IntensityProfileSampler().refine(image, paired, pixel_size_xy_m=(1.0, 1.0))
+    assert profile.accepted.sum() > 20
+    assert np.isclose(np.median(profile.diameter_m[profile.accepted]), 20.0, atol=2.0)
+
+
+def test_profile_width_is_polarity_invariant_for_bright_and_dark_fibers():
+    mask = np.zeros((100, 140), dtype=bool)
+    mask[40:60, 15:125] = True
+    field = _field(mask)
+    paired = OrientedBoundaryEngine(low_coherence=0.0, high_asymmetry=0.8).pair_centerline(
+        mask=mask, centerline=field.centerline, orientation_qx=field.orientation_qx,
+        orientation_qy=field.orientation_qy, coherence=field.coherence,
+        edt_diameter_m=field.diameter_m, pixel_size_xy_m=(1.0, 1.0),
+    )
+    sampler = IntensityProfileSampler()
+    bright = sampler.refine(ndimage.gaussian_filter(mask.astype(float), 1.0), paired, pixel_size_xy_m=(1.0, 1.0))
+    dark = sampler.refine(1.0 - ndimage.gaussian_filter(mask.astype(float), 1.0), paired, pixel_size_xy_m=(1.0, 1.0))
+    assert np.isclose(np.median(bright.diameter_m[bright.accepted]), np.median(dark.diameter_m[dark.accepted]), atol=0.5)

@@ -86,6 +86,129 @@ class PairedEdgeSamples:
     accepted: np.ndarray
     flags: tuple[tuple[str, ...], ...]
 
+    @property
+    def d_min_from_edges_m(self) -> np.ndarray:
+        return 2.0 * np.minimum(self.radius_minus_m, self.radius_plus_m)
+
+    @property
+    def absolute_side_imbalance_m(self) -> np.ndarray:
+        return np.abs(self.radius_plus_m - self.radius_minus_m)
+
+
+@dataclass(frozen=True, slots=True)
+class IntensityProfileSamples:
+    """Raw-SEM normal-profile refinements of local mask-edge pairs."""
+
+    diameter_m: np.ndarray
+    minus_u_m: np.ndarray
+    plus_u_m: np.ndarray
+    minus_shift_m: np.ndarray
+    plus_shift_m: np.ndarray
+    gradient_snr: np.ndarray
+    suggested_center_shift_m: np.ndarray
+    accepted: np.ndarray
+    flags: tuple[tuple[str, ...], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class IntensityProfileSampler:
+    """Local, subpixel 1-D SEM edge refinement around mask-edge priors."""
+
+    step_pixel_fraction: float = 0.25
+    smoothing_sigma_pixels: float = 0.5
+    search_window_pixels: float = 1.5
+    margin_pixels: float = 1.0
+    ambiguity_relative_peak: float = 0.9
+
+    def refine(
+        self,
+        image: np.ndarray,
+        paired: PairedEdgeSamples,
+        *,
+        pixel_size_xy_m: tuple[float, float],
+    ) -> IntensityProfileSamples:
+        source = np.asarray(image, dtype=float)
+        px, py = (float(value) for value in pixel_size_xy_m)
+        pixel = min(px, py)
+        count = paired.diameter_m.size
+        minus_u = np.full(count, np.nan)
+        plus_u = np.full(count, np.nan)
+        snr = np.full(count, np.nan)
+        flags: list[list[str]] = [[] for _ in range(count)]
+        eligible = np.asarray(paired.accepted, bool)
+        if not np.any(eligible):
+            return self._result(minus_u, plus_u, snr, paired, flags)
+        step = self.step_pixel_fraction * pixel
+        search = self.search_window_pixels * pixel
+        margin = self.margin_pixels * pixel
+        sigma = self.smoothing_sigma_pixels / self.step_pixel_fraction
+        indices = np.flatnonzero(eligible)
+        for start in range(0, indices.size, 1024):
+            chosen = indices[start:start + 1024]
+            extent = np.max(np.maximum(paired.radius_minus_m[chosen], paired.radius_plus_m[chosen]) + margin + search)
+            grid = np.arange(-extent, extent + step * 0.5, step)
+            xy = paired.center_xy_m[chosen, None, :] + grid[None, :, None] * paired.normal_xy[chosen, None, :]
+            profile = ndimage.map_coordinates(
+                source, [xy[..., 1].ravel() / py, xy[..., 0].ravel() / px], order=1, mode="nearest"
+            ).reshape(chosen.size, grid.size)
+            smooth = ndimage.gaussian_filter1d(profile, sigma=sigma, axis=1, mode="nearest")
+            gradient = np.abs(np.gradient(smooth, step, axis=1))
+            noise = np.median(gradient, axis=1) + 1.4826 * np.median(
+                np.abs(gradient - np.median(gradient, axis=1, keepdims=True)), axis=1
+            ) + np.finfo(float).eps
+            for local, index in enumerate(chosen):
+                for sign, prior, destination in (
+                    (-1.0, -paired.radius_minus_m[index], "minus"),
+                    (1.0, paired.radius_plus_m[index], "plus"),
+                ):
+                    nearby = np.flatnonzero(np.abs(grid - prior) <= search)
+                    if nearby.size < 3:
+                        flags[index].append(f"PROFILE_EDGE_{destination.upper()}_NOT_FOUND")
+                        continue
+                    values = gradient[local, nearby]
+                    peak = nearby[int(np.argmax(values))]
+                    peak_value = gradient[local, peak]
+                    # A broad single transition naturally occupies adjacent
+                    # samples; ambiguity requires a separated competing peak.
+                    high = values >= self.ambiguity_relative_peak * peak_value
+                    if np.count_nonzero(high) and np.max(np.abs(nearby[high] - peak)) > 2:
+                        flags[index].append("PROFILE_AMBIGUOUS_EDGE")
+                    if peak == 0 or peak == grid.size - 1:
+                        flags[index].append(f"PROFILE_EDGE_{destination.upper()}_NOT_FOUND")
+                        continue
+                    left, center, right = gradient[local, peak - 1:peak + 2]
+                    denominator = left - 2.0 * center + right
+                    offset = 0.0 if denominator == 0 else 0.5 * (left - right) / denominator
+                    offset = float(np.clip(offset, -1.0, 1.0))
+                    position = grid[peak] + offset * step
+                    if destination == "minus":
+                        minus_u[index] = position
+                    else:
+                        plus_u[index] = position
+                    snr[index] = max(snr[index], peak_value / noise[local]) if np.isfinite(snr[index]) else peak_value / noise[local]
+        return self._result(minus_u, plus_u, snr, paired, flags)
+
+    @staticmethod
+    def _result(
+        minus_u: np.ndarray, plus_u: np.ndarray, snr: np.ndarray,
+        paired: PairedEdgeSamples, flags: list[list[str]],
+    ) -> IntensityProfileSamples:
+        diameter = plus_u - minus_u
+        shifts_minus = minus_u + paired.radius_minus_m
+        shifts_plus = plus_u - paired.radius_plus_m
+        accepted = np.asarray(paired.accepted, bool) & np.isfinite(diameter) & (diameter > 0)
+        for index in range(diameter.size):
+            if not np.isfinite(minus_u[index]): flags[index].append("PROFILE_EDGE_MINUS_NOT_FOUND")
+            if not np.isfinite(plus_u[index]): flags[index].append("PROFILE_EDGE_PLUS_NOT_FOUND")
+            if not np.isfinite(diameter[index]) or diameter[index] <= 0: flags[index].append("PROFILE_NONPOSITIVE_WIDTH")
+            if "PROFILE_AMBIGUOUS_EDGE" in flags[index]: accepted[index] = False
+            if not accepted[index] and not flags[index]: flags[index].append("PROFILE_REJECTED_FROM_PAIRED_EDGE")
+        return IntensityProfileSamples(
+            diameter, minus_u, plus_u, shifts_minus, shifts_plus, snr,
+            (paired.radius_plus_m - paired.radius_minus_m) / 2.0,
+            accepted, tuple(tuple(item) for item in flags),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class OrientedBoundaryEngine:
