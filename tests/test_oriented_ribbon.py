@@ -574,3 +574,101 @@ def test_zero_shift_remains_finite():
     assert observation.shift_mask_um == pytest.approx(0.0, abs=1e-12)
     assert np.isfinite(result.shift_um).all()
     assert result.summary["median_shift_um"] == pytest.approx(0.0, abs=1e-9)
+
+
+# ------------------------------------------------------- profile preflight
+
+
+def _rotated_profile_samples(angle_deg: float, n: int = 4, profile_shift_um: float = 2.0) -> dict[str, np.ndarray]:
+    theta = math.radians(angle_deg)
+    normal = np.array([-math.sin(theta), math.cos(theta)])
+    c0_m = np.array([50.0 * PX, 80.0 * PY])
+    half_width_px = 10.0
+    offset_m = profile_shift_um * 1e-6  # seed displaced along +n by 2 µm
+    centers = c0_m[None, :] + np.linspace(-15.0, 15.0, n)[:, None] * PX * np.array([math.cos(theta), math.sin(theta)])
+    u_minus = -(half_width_px * PY + offset_m)
+    u_plus = half_width_px * PY - offset_m
+    samples: dict[str, np.ndarray] = {
+        "x_m": centers[:, 0],
+        "y_m": centers[:, 1],
+        "qx": np.full(n, math.cos(2 * theta)),
+        "qy": np.full(n, math.sin(2 * theta)),
+        "coherence": np.full(n, 0.9),
+        "normal_xy": np.tile(normal, (n, 1)),
+        "minus_xy_m": centers + u_minus * normal[None, :],
+        "plus_xy_m": centers + u_plus * normal[None, :],
+        "radius_minus_um": np.full(n, -u_minus * 1e6),
+        "radius_plus_um": np.full(n, u_plus * 1e6),
+        "edge_accepted": np.ones(n, bool),
+        "edge_flags": np.full(n, "", dtype="<U80"),
+        "profile_minus_u_um": np.full(n, u_minus * 1e6),
+        "profile_plus_u_um": np.full(n, u_plus * 1e6),
+        "profile_accepted": np.ones(n, bool),
+        "profile_flags": np.full(n, "", dtype="<U80"),
+        "profile_gradient_snr": np.full(n, 9.0),
+    }
+    return samples
+
+
+@pytest.mark.parametrize("angle_deg", [0.0, 15.0, 30.0, 45.0, 60.0, 90.0])
+def test_profile_midpoint_rotation_preflight(angle_deg: float):
+    """PROFILE midpoint reconstruction is rotation invariant in physical units."""
+    samples = _rotated_profile_samples(angle_deg)
+    result = compute_midpoint_observations(samples)
+    for observation in result.observations:
+        midpoint = observation.profile_midpoint_xy_m
+        assert midpoint is not None
+        assert observation.preferred_midpoint_source == "PROFILE"
+        # seed displaced +2 µm along n → profile midpoint sits 2 µm opposite
+        shift = np.array(observation.shift_profile_um) * 1e-6
+        assert shift == pytest.approx(2.0e-6, rel=1e-9)
+        assert observation.signed_normal_shift_profile_um == pytest.approx(-2.0, rel=1e-9)
+        # width = 2 * 10px * PY regardless of angle
+        assert observation.profile_width_um == pytest.approx(20.0 * PY * 1e6, rel=1e-9)
+        # reconstruction identity: p_profile = c0 + u * n
+        c0 = np.array(observation.original_xy_m)
+        nv = np.array(observation.normal_xy)
+        np.testing.assert_allclose(
+            midpoint,
+            c0 + 0.5 * (samples["profile_minus_u_um"][0] + samples["profile_plus_u_um"][0]) * 1e-6 * nv,
+            atol=1e-15,
+        )
+
+
+def test_profile_anisotropy_preflight():
+    """PROFILE midpoint is correct under anisotropic calibration (px != py)."""
+    py = 5.0
+    theta = math.radians(60.0)
+    normal = np.array([-math.sin(theta), math.cos(theta)])
+    n = 3
+    centers = np.full((n, 2), 0.0)
+    u_minus = -11.0 * py
+    u_plus = 9.0 * py
+    samples: dict[str, np.ndarray] = {
+        "x_m": centers[:, 0],
+        "y_m": centers[:, 1],
+        "qx": np.full(n, math.cos(2 * theta)),
+        "qy": np.full(n, math.sin(2 * theta)),
+        "coherence": np.full(n, 0.9),
+        "normal_xy": np.tile(normal, (n, 1)),
+        "minus_xy_m": centers + u_minus * normal[None, :],
+        "plus_xy_m": centers + u_plus * normal[None, :],
+        "radius_minus_um": np.full(n, -u_minus * 1e6),
+        "radius_plus_um": np.full(n, u_plus * 1e6),
+        "edge_accepted": np.ones(n, bool),
+        "edge_flags": np.full(n, "", dtype="<U80"),
+        "profile_minus_u_um": np.full(n, u_minus * 1e6),
+        "profile_plus_u_um": np.full(n, u_plus * 1e6),
+        "profile_accepted": np.ones(n, bool),
+        "profile_flags": np.full(n, "", dtype="<U80"),
+        "profile_gradient_snr": np.full(n, 9.0),
+    }
+    result = compute_midpoint_observations(samples)
+    observation = result.observations[0]
+    midpoint = observation.profile_midpoint_xy_m
+    assert midpoint is not None
+    # profile midpoint = c0 + (u_minus + u_plus)/2 * n = -1 * py * n (physical)
+    expected = 0.5 * (u_minus + u_plus) * normal
+    np.testing.assert_allclose(midpoint, expected, atol=1e-15)
+    assert observation.profile_width_um == pytest.approx((u_plus - u_minus) * 1e6, rel=1e-12)
+    assert observation.shift_profile_um == pytest.approx(py * 1e6, rel=1e-9)
