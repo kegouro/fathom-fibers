@@ -201,12 +201,45 @@ def fathom_local_adapter(
     values = common.diameter if common else np.array([])
     native = DiameterDistribution(values, np.ones(values.size), "um", Estimand.FATHOM_NATIVE_LOCAL, MethodId.FATHOM_LOCAL) if values.size else None
     flags = tuple(sorted(set(analysis.flags) | {flag for candidate in analysis.candidates for flag in candidate.quality_flags}))
+    sections_xy = np.empty((0, 4), float)
+    sections_weights = np.empty(0, float)
+    sections_flags: list[str] = []
+    for candidate in analysis.candidates:
+        for proposal in candidate.proposed_measurements:
+            sections_xy = np.vstack(
+                (
+                    sections_xy,
+                    np.asarray(
+                        [
+                            (
+                                proposal.p1[0],
+                                proposal.p1[1],
+                                proposal.p2[0],
+                                proposal.p2[1],
+                            )
+                        ],
+                        float,
+                    ),
+                )
+            )
+            sections_weights = np.append(sections_weights, proposal.width_m * 1e6)
+            sections_flags.append(";".join(sorted(proposal.quality_flags)))
+    local_samples = None
+    if sections_xy.size:
+        local_samples = {
+            "section_x0_px": sections_xy[:, 0],
+            "section_y0_px": sections_xy[:, 1],
+            "section_x1_px": sections_xy[:, 2],
+            "section_y1_px": sections_xy[:, 3],
+            "section_width_um": sections_weights,
+            "section_flags": np.asarray(sections_flags, dtype="<U80"),
+        }
     return MethodResult(
         MethodId.FATHOM_LOCAL, "FATHOM_ASSISTED_ROI_V1", image.image_id, _calibration(image), roi, "um",
         MethodCapabilities({Capability.LOCAL_METROLOGY: CapabilityState.AVAILABLE, Capability.CROSS_SECTIONS: CapabilityState.AVAILABLE, Capability.QUALITY_FLAGS: CapabilityState.AVAILABLE, Capability.MANUAL_REVIEW: CapabilityState.AVAILABLE}),
         MethodStatus.COMPLETE, Estimand.FATHOM_NATIVE_LOCAL, float(np.median(values)) if values.size else None,
         {"candidate_count": len(analysis.candidates), "resolution_status": analysis.summary.resolution_status, "section_count": int(values.size)},
-        native, common, quality_flags=flags, runtime_seconds=time.monotonic() - started,
+        native, common, local_samples=local_samples, quality_flags=flags, runtime_seconds=time.monotonic() - started,
         provenance={"roi": roi, "sampling_weights": "candidate_centerline_length / proposed_section_count", "cache_key": method_cache_key(image_sha256=image.source_sha256, valid_roi=roi, calibration=_calibration(image), method_id=MethodId.FATHOM_LOCAL, method_version="FATHOM_ASSISTED_ROI_V1", parameters={})},
     )
 
@@ -264,6 +297,7 @@ def classical_field_adapter(
     valid = np.isfinite(diameter_um) & np.isfinite(weights_m) & (weights_m > 0) & (diameter_um > 0)
     diameter_um, radius_um, weights_m = diameter_um[valid], radius_um[valid], weights_m[valid]
     coherence, qx, qy, rows, cols = coherence[valid], qx[valid], qy[valid], rows[valid], cols[valid]
+    edge_offset_m = np.asarray((x0 * image.calibration.pixel_size_x_m, y0 * image.calibration.pixel_size_y_m), float)
     common = (
         DiameterDistribution(diameter_um, weights_m, "um", Estimand.COMMON_LENGTH_WEIGHTED_DIAMETER, MethodId.FATHOM_FIELD_GRAPH_V1)
         if diameter_um.size else None
@@ -285,6 +319,12 @@ def classical_field_adapter(
             Estimand.FATHOM_FIELD_PROFILE_DIAMETER, MethodId.FATHOM_FIELD_GRAPH_V1,
         ) if np.any(profile_accepted) else None
     )
+    edge_flags = np.asarray(
+        [";".join(flags) for flags in paired.flags], dtype="<U80"
+    )[valid]
+    profile_flags = np.asarray(
+        [";".join(flags) for flags in profile.flags], dtype="<U80"
+    )[valid]
     d_min = np.asarray(paired.d_min_from_edges_m, float)[valid]
     imbalance = np.asarray(paired.absolute_side_imbalance_m, float)[valid]
     edge_minus_edt = edge_diameter_um * 1e-6 - np.asarray(output.diameter_m, float)[centerline][valid]
@@ -370,6 +410,11 @@ def classical_field_adapter(
             "radius_um": radius_um,
             "diameter_um": diameter_um,
             "arc_length_weight_m": weights_m,
+            "normal_xy": paired.normal_xy[valid],
+            "minus_xy_m": paired.minus_xy_m[valid] + edge_offset_m,
+            "plus_xy_m": paired.plus_xy_m[valid] + edge_offset_m,
+            "radius_minus_um": paired.radius_minus_m[valid] * 1e6,
+            "radius_plus_um": paired.radius_plus_m[valid] * 1e6,
             "edge_diameter_um": edge_diameter_um,
             "edge_asymmetry": edge_asymmetry,
             "edge_accepted": edge_accepted,
@@ -384,8 +429,12 @@ def classical_field_adapter(
             "profile_minus_edge_um": profile_minus_edge * 1e6,
             "profile_minus_shift_um": profile.minus_shift_m[valid] * 1e6,
             "profile_plus_shift_um": profile.plus_shift_m[valid] * 1e6,
+            "profile_minus_u_um": profile.minus_u_m[valid] * 1e6,
+            "profile_plus_u_um": profile.plus_u_m[valid] * 1e6,
             "profile_gradient_snr": profile.gradient_snr[valid],
             "suggested_center_shift_um": profile.suggested_center_shift_m[valid] * 1e6,
+            "edge_flags": edge_flags,
+            "profile_flags": profile_flags,
         },
         quality_flags=tuple(flags), confidence=mean_coherence,
         runtime_seconds=time.monotonic() - started,
