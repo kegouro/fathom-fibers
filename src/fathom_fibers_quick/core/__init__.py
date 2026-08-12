@@ -6,6 +6,12 @@ frontends should consume this namespace or :mod:`fathom_fibers_quick.api`.
 
 from ..measurement_records import MeasurementKind, MeasurementRecord, MeasurementStatus
 from ..model import Calibration, ImageDocument, Project
+from .centerline_refinement import (
+    CenterlineSegment,
+    SeedRun,
+    order_seed_runs,
+    refine_centerline,
+)
 from .contracts import (
     FathomAnalysisResult,
     MethodComparisonResult,
@@ -38,6 +44,7 @@ __all__ = [
     "CapabilityState",
     "CenterlineRefinementConfig",
     "CenterlineRefinementResult",
+    "CenterlineSegment",
     "DiameterDistribution",
     "Estimand",
     "FathomAnalysisResult",
@@ -57,5 +64,8 @@ __all__ = [
     "Project",
     "ScientificImage",
     "ScientificMeasurement",
+    "SeedRun",
     "compute_midpoint_observations",
+    "order_seed_runs",
+    "refine_centerline",
 ]

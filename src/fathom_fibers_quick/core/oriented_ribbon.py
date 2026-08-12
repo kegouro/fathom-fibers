@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -81,10 +81,20 @@ class CenterlineRefinementConfig:
     (0.15) so the ribbon stage never accepts what the orientation field
     itself already distrusts.  ``tangential_mismatch_fraction`` is a generic
     geometric sanity bound for the diagnostic flag only; it never rejects.
+
+    Batch 2 parameters: ``max_gap_factor`` and ``min_segment_points`` control
+    refinable-run splitting, and ``smoothing_strength`` selects the smoothing
+    scale: ``1.0`` (default) uses SciPy's data-driven GCV smoothing spline;
+    other values scale a documented normalized baseline
+    (``lam = strength * n * 1e-4``).  Defaults are conservative and evaluated
+    by synthetic truth, never tuned on real SEM data.
     """
 
     min_coherence: float = 0.15
     tangential_mismatch_fraction: float = 0.5
+    max_gap_factor: float = 2.0
+    min_segment_points: int = 5
+    smoothing_strength: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +141,14 @@ class BoundaryMidpointObservation:
 
 @dataclass(frozen=True, slots=True)
 class CenterlineRefinementResult:
-    """Stage-1 ribbon output: midpoint observations only, no refined curve."""
+    """Ribbon output: midpoint observations and, when smoothed, segments.
+
+    Batch 1 (``compute_midpoint_observations``) fills only the observation
+    fields; refinement fields keep their ``None`` defaults.  Batch 2
+    (``refine_centerline``) returns a result of the same type with
+    ``segments``, ``refined_xy_m``, ``refined_mask`` and ``segment_ids``
+    populated, so both stages share one backwards-compatible contract.
+    """
 
     observations: tuple[BoundaryMidpointObservation, ...]
     original_xy_m: np.ndarray
@@ -149,11 +166,17 @@ class CenterlineRefinementResult:
     summary: dict[str, float | int | None]
     flags: tuple[str, ...]
     metadata: dict[str, Any]
+    segments: tuple[CenterlineSegment, ...] = ()
+    refined_xy_m: np.ndarray | None = None
+    refined_mask: np.ndarray | None = None
+    segment_ids: np.ndarray | None = None
+    smooth_shift_um: np.ndarray | None = None
+    smooth_normal_shift_um: np.ndarray | None = None
+    smooth_tangential_shift_um: np.ndarray | None = None
 
-    @property
-    def refined_xy_m(self) -> None:
-        """Batch 2 contract placeholder; never computed in this stage."""
-        return None
+
+if TYPE_CHECKING:
+    from .centerline_refinement import CenterlineSegment
 
 
 def _split_flags(value: Any) -> tuple[str, ...]:

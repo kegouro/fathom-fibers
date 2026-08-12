@@ -373,8 +373,11 @@ def classical_field_adapter(
         "suggested_center_shift_um": profile.suggested_center_shift_m[valid] * 1e6,
         "edge_flags": edge_flags,
         "profile_flags": profile_flags,
+        "seed_row": rows + y0,
+        "seed_col": cols + x0,
     }
     if local_samples:
+        from .core.centerline_refinement import refine_centerline
         from .core.oriented_ribbon import compute_midpoint_observations
 
         ribbon = compute_midpoint_observations(
@@ -398,11 +401,35 @@ def classical_field_adapter(
         )
         ribbon_flags = tuple(flag for flag in ribbon.flags if flag != "MIDPOINT_OBSERVATIONS_ONLY")
         flags.extend(ribbon_flags)
+        smooth = refine_centerline(
+            ribbon,
+            local_samples,
+            np.asarray(centerline, dtype=bool),
+            pixel_size_xy_m=(image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m),
+        )
+        refined_xy = smooth.refined_xy_m
+        if refined_xy is not None:
+            local_samples.update(
+                {
+                    "refined_xy_m": refined_xy,
+                    "refined_mask": smooth.refined_mask,
+                    "segment_id": smooth.segment_ids,
+                    "smooth_shift_um": smooth.smooth_shift_um,
+                    "smooth_shift_signed_um": smooth.smooth_normal_shift_um,
+                    "smooth_shift_tangent_um": smooth.smooth_tangential_shift_um,
+                }
+            )
+            smooth_flags = tuple(flag for flag in smooth.flags if flag not in {"SMOOTH_CENTERLINE_V1"})
+            flags.extend(smooth_flags)
         native_statistics_payload = {
             "refine_accepted_count": ribbon.summary["accepted_count"],
             "refine_coverage_fraction": ribbon.coverage_fraction,
             "refine_median_shift_um": ribbon.summary["median_shift_um"],
             "refine_p90_shift_um": ribbon.summary["p90_shift_um"],
+            "smooth_coverage_fraction": smooth.summary["smooth_coverage"],
+            "smooth_segment_count": smooth.summary["segment_count"],
+            "smooth_median_shift_um": smooth.summary["median_smooth_shift_um"],
+            "smooth_p90_shift_um": smooth.summary["p90_smooth_shift_um"],
         }
     else:
         native_statistics_payload = {}
