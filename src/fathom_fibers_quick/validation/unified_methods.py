@@ -13,6 +13,7 @@ import numpy as np
 
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
+from scipy import stats
 
 from ..api import FathomEngine
 from ..core.distributions import summarize_distribution
@@ -57,11 +58,42 @@ def _jsonable_result(result: MethodResult) -> dict[str, Any]:
             "p75": summary.p75,
             "p95": summary.p95,
         },
+        "secondary_distributions": {
+            name: {
+                "unit": distribution.unit,
+                "estimand": distribution.estimand.value,
+                "n": item_summary.n,
+                "weight_sum": item_summary.weight_sum,
+                "mean": item_summary.weighted_mean,
+                "median": item_summary.weighted_median,
+                "p05": item_summary.p05,
+                "p25": item_summary.p25,
+                "p50": item_summary.p50,
+                "p75": item_summary.p75,
+                "p95": item_summary.p95,
+            }
+            for name, distribution in result.secondary_distributions.items()
+            for item_summary in (summarize_distribution(distribution),)
+        },
     }
 
 
 def _comparison_payload(report: ImageMorphologyReport) -> dict[str, Any]:
     comparison = report.comparison
+    field = next((result for result in comparison.results if result.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None)
+    edge = field.secondary_distributions.get("FATHOM_FIELD_PAIRED_EDGE_DIAMETER") if field else None
+    edge_agreements: dict[str, dict[str, float | None]] = {}
+    if edge is not None:
+        for other in comparison.results:
+            distribution = other.common_distribution
+            if distribution is None or not distribution.diameter.size:
+                continue
+            edge_summary = summarize_distribution(edge)
+            other_summary = summarize_distribution(distribution)
+            edge_agreements[other.method_id.value] = {
+                "wasserstein_1": float(stats.wasserstein_distance(edge.diameter, distribution.diameter, edge.weight, distribution.weight)),
+                "median_difference": edge_summary.weighted_median - other_summary.weighted_median,
+            }
     return {
         "image_id": report.image_id,
         "results": [_jsonable_result(result) for result in comparison.results],
@@ -74,6 +106,7 @@ def _comparison_payload(report: ImageMorphologyReport) -> dict[str, Any]:
             "disagreement_mad": comparison.consensus.disagreement_mad.tolist(),
         },
         "limitations": list(report.limitations),
+        "field_edge_agreements": edge_agreements,
     }
 
 
@@ -219,21 +252,35 @@ def generate_unified_report(repo: Path) -> Path:
     )
     image_rows = []
     field_rows = []
+    edge_rows = []
     for payload in payloads:
         statuses = ", ".join(f"{entry['method_id']}: {entry['status']}" for entry in payload.get("results", []))
         consensus = payload.get("consensus", {})
         image_rows.append(f"<tr><td>{html.escape(payload.get('image_id', 'unknown'))}</td><td>{html.escape(statuses)}</td><td>{html.escape(', '.join(consensus.get('participating_methods', [])) or '—')}</td></tr>")
         field = next((entry for entry in payload.get("results", []) if entry["method_id"] == MethodId.FATHOM_FIELD_GRAPH_V1.value), None)
         stats = field.get("native_statistics", {}) if field else {}
+        edge = (field.get("secondary_distributions") or {}).get("FATHOM_FIELD_PAIRED_EDGE_DIAMETER") if field else None
         coherence = stats.get("mean_coherence")
         nematic = stats.get("nematic_order_parameter")
         coherence_text = "—" if coherence is None else f"{coherence:.4g}"
         nematic_text = "—" if nematic is None else f"{nematic:.4g}"
+        acceptance = stats.get("edge_acceptance_fraction")
+        asymmetry = stats.get("edge_median_asymmetry")
+        acceptance_text = "—" if acceptance is None else f"{acceptance:.2%}"
+        asymmetry_text = "—" if asymmetry is None else f"{asymmetry:.4g}"
+        edge_median = "—" if edge is None else f"{edge['median']:.6g}"
+        edge_edt = payload.get("field_edge_agreements", {}).get(MethodId.FATHOM_FIELD_GRAPH_V1.value)
+        edge_edt_text = "—" if edge_edt is None else f"{edge_edt['wasserstein_1']:.6g}"
         field_rows.append(
             f"<tr><td>{html.escape(payload.get('image_id', 'unknown'))}</td><td>{html.escape(field.get('status', 'NOT_RUN') if field else 'NOT_RUN')}</td>"
             f"<td>{stats.get('sample_count', '—')}</td><td>{coherence_text}</td>"
             f"<td>{nematic_text}</td>"
             f"<td>{html.escape(str(stats.get('centerline_source', '—')))}</td></tr>"
+        )
+        edge_rows.append(
+            f"<tr><td>{html.escape(payload.get('image_id', 'unknown'))}</td><td>{stats.get('edge_raw_count', '—')}</td>"
+            f"<td>{stats.get('edge_accepted_count', '—')}</td><td>{acceptance_text}</td>"
+            f"<td>{asymmetry_text}</td><td>{edge_median}</td><td>{edge_edt_text}</td></tr>"
         )
     index = output / "index.html"
     index.write_text(f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Unified Method Comparison</title>
@@ -245,6 +292,7 @@ def generate_unified_report(repo: Path) -> Path:
 <h2>Pairwise median-method difference</h2><table><tr><th>Left</th><th>Right</th><th>Median difference (µm)</th><th>Images</th></tr>{median_difference_rows}</table>
 <h2>16-image processing matrix</h2><table><tr><th>Image</th><th>Method states</th><th>Consensus participants</th></tr>{''.join(image_rows)}</table>
 <h2>Field diagnostics</h2><table><tr><th>Image</th><th>Status</th><th>N samples</th><th>Mean coherence</th><th>Nematic S</th><th>Centerline source</th></tr>{''.join(field_rows)}</table>
+<h2>Paired-edge diagnostics (experimental)</h2><table><tr><th>Image</th><th>N raw</th><th>N accepted</th><th>Acceptance</th><th>Median asymmetry</th><th>Edge median µm</th><th>W1 Edge ↔ EDT µm</th></tr>{''.join(edge_rows)}</table>
 <h2>Method limitations</h2><ul><li>Measurements represent projected 2-D geometry.</li><li>FATHOM_FIELD_GRAPH_V1 implements a field stage only: orientation and mask-derived EDT diameters are sampled on an explicit skeleton baseline. Graph, topology, crossing resolution and fibre instances are unavailable.</li><li>Manual 5×5 remains <code>NOT_MEASURED</code> until actual accepted records exist.</li><li>Dataset display balances images; it does not blindly pool skeleton samples.</li></ul>
 </body></html>""", encoding="utf-8")
     return index

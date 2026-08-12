@@ -41,6 +41,8 @@ class Capability(str, Enum):
     MASK = "MASK"
     SKELETON = "SKELETON"
     ORIENTATION_FIELD = "ORIENTATION_FIELD"
+    ORIENTED_BOUNDARIES = "ORIENTED_BOUNDARIES"
+    PAIRED_EDGE_LOCAL_WIDTH = "PAIRED_EDGE_LOCAL_WIDTH"
     LOCAL_RADIUS = "LOCAL_RADIUS"
     LOCAL_DIAMETER = "LOCAL_DIAMETER"
     GRAPH = "GRAPH"
@@ -62,6 +64,7 @@ class Estimand(str, Enum):
     FIBER_BALANCED_DIAMETER = "FIBER_BALANCED_DIAMETER"
     SIMPOLY_NATIVE_GAUSS1 = "SIMPOLY_NATIVE_GAUSS1"
     FATHOM_NATIVE_LOCAL = "FATHOM_NATIVE_LOCAL"
+    FATHOM_FIELD_PAIRED_EDGE_DIAMETER = "FATHOM_FIELD_PAIRED_EDGE_DIAMETER"
     MANUAL_5X5_REFERENCE = "MANUAL_5X5_REFERENCE"
 
 
@@ -125,6 +128,7 @@ class MethodResult:
     native_statistics: Mapping[str, Any] = field(default_factory=dict)
     native_distribution: DiameterDistribution | None = None
     common_distribution: DiameterDistribution | None = None
+    secondary_distributions: Mapping[str, DiameterDistribution] = field(default_factory=dict)
     fiber_balanced_distribution: DiameterDistribution | None = None
     mask: np.ndarray | None = None
     centerline: np.ndarray | None = None
@@ -149,6 +153,7 @@ class MethodResult:
             self.native_distribution,
             self.common_distribution,
             self.fiber_balanced_distribution,
+            *self.secondary_distributions.values(),
         ):
             if distribution is not None and distribution.unit != self.unit:
                 raise ValueError("all distributions must use the result unit")

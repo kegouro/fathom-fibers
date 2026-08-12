@@ -14,7 +14,7 @@ import numpy as np
 from scipy.io import loadmat
 
 from .core.contracts import ScientificImage
-from .core.fiber_field import ClassicalFiberField
+from .core.fiber_field import ClassicalFiberField, OrientedBoundaryEngine
 from .core.methods import (
     Capability,
     CapabilityState,
@@ -227,6 +227,20 @@ def classical_field_adapter(
         mask=binary,
         pixel_size_xy_m=(image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m),
     )
+    boundary_engine = OrientedBoundaryEngine()
+    contours = boundary_engine.extract_contours(
+        binary, pixel_size_xy_m=(image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m)
+    )
+    paired = boundary_engine.pair_centerline(
+        mask=binary,
+        centerline=np.asarray(output.centerline, bool),
+        orientation_qx=np.asarray(output.orientation_qx, float),
+        orientation_qy=np.asarray(output.orientation_qy, float),
+        coherence=np.asarray(output.coherence, float),
+        edt_diameter_m=np.asarray(output.diameter_m, float),
+        pixel_size_xy_m=(image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m),
+        contours=contours,
+    )
     centerline = np.asarray(output.centerline, dtype=bool)
     rows, cols = np.nonzero(centerline)
     weights_m = _length_weights(centerline, image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m)
@@ -241,6 +255,15 @@ def classical_field_adapter(
     common = (
         DiameterDistribution(diameter_um, weights_m, "um", Estimand.COMMON_LENGTH_WEIGHTED_DIAMETER, MethodId.FATHOM_FIELD_GRAPH_V1)
         if diameter_um.size else None
+    )
+    edge_accepted = np.asarray(paired.accepted, bool)[valid]
+    edge_diameter_um = np.asarray(paired.diameter_m, float)[valid] * 1e6
+    edge_asymmetry = np.asarray(paired.asymmetry, float)[valid]
+    edge_distribution = (
+        DiameterDistribution(
+            edge_diameter_um[edge_accepted], weights_m[edge_accepted], "um",
+            Estimand.FATHOM_FIELD_PAIRED_EDGE_DIAMETER, MethodId.FATHOM_FIELD_GRAPH_V1,
+        ) if np.any(edge_accepted) else None
     )
     native = common
     vector_x = float(np.average(qx, weights=weights_m)) if weights_m.size else 0.0
@@ -257,6 +280,8 @@ def classical_field_adapter(
             Capability.MASK: CapabilityState.AVAILABLE,
             Capability.SKELETON: CapabilityState.AVAILABLE,
             Capability.ORIENTATION_FIELD: CapabilityState.AVAILABLE,
+            Capability.ORIENTED_BOUNDARIES: CapabilityState.AVAILABLE,
+            Capability.PAIRED_EDGE_LOCAL_WIDTH: CapabilityState.EXPERIMENTAL,
             Capability.LOCAL_RADIUS: CapabilityState.AVAILABLE,
             Capability.LOCAL_DIAMETER: CapabilityState.AVAILABLE,
             Capability.GLOBAL_DIAMETER_DISTRIBUTION: CapabilityState.AVAILABLE,
@@ -275,9 +300,19 @@ def classical_field_adapter(
             "radius_sample_median_um": float(np.median(radius_um)) if radius_um.size else None,
             "centerline_source": output.metadata["centerline_algorithm"],
             "radius_estimator": output.metadata["radius_method"],
+            "edge_raw_count": int(edge_diameter_um.size),
+            "edge_accepted_count": int(np.sum(edge_accepted)),
+            "edge_acceptance_fraction": float(np.mean(edge_accepted)) if edge_accepted.size else None,
+            "edge_mean_asymmetry": float(np.nanmean(edge_asymmetry)) if np.any(np.isfinite(edge_asymmetry)) else None,
+            "edge_median_asymmetry": float(np.nanmedian(edge_asymmetry)) if np.any(np.isfinite(edge_asymmetry)) else None,
+            "edge_mean_tangent_alignment": float(np.nanmean(paired.tangent_alignment[valid])) if np.any(np.isfinite(paired.tangent_alignment[valid])) else None,
+            "edge_mean_normal_consistency": float(np.nanmean(paired.boundary_normal_consistency[valid])) if np.any(np.isfinite(paired.boundary_normal_consistency[valid])) else None,
+            "edge_flag_counts": {flag: sum(flag in sample for sample in paired.flags) for flag in sorted({flag for sample in paired.flags for flag in sample})},
+            "boundary_contour_count": len(contours),
         },
         native,
         common,
+        secondary_distributions={"FATHOM_FIELD_PAIRED_EDGE_DIAMETER": edge_distribution} if edge_distribution else {},
         mask=binary,
         centerline=centerline,
         orientation_field=(np.asarray(output.orientation_qx), np.asarray(output.orientation_qy)),
@@ -291,6 +326,11 @@ def classical_field_adapter(
             "radius_um": radius_um,
             "diameter_um": diameter_um,
             "arc_length_weight_m": weights_m,
+            "edge_diameter_um": edge_diameter_um,
+            "edge_asymmetry": edge_asymmetry,
+            "edge_accepted": edge_accepted,
+            "edge_tangent_alignment": paired.tangent_alignment[valid],
+            "edge_normal_consistency": paired.boundary_normal_consistency[valid],
         },
         quality_flags=tuple(flags), confidence=mean_coherence,
         runtime_seconds=time.monotonic() - started,
@@ -302,6 +342,16 @@ def classical_field_adapter(
             "centerline_source": output.metadata["centerline_algorithm"],
             "orientation_method": output.metadata["orientation_method"],
             "radius_method": output.metadata["radius_method"],
+            "contour_algorithm": "SKIMAGE_FIND_CONTOURS_0.5",
+            "tangent_estimator": "CENTRAL_CONTOUR_DIFFERENCE_PHYSICAL_V1",
+            "pairing_strategy": "CENTERLINE_NORMAL_BINARY_RAY_INTERPOLATION_V1",
+            "pairing_config": {
+                "tangent_window": boundary_engine.tangent_window,
+                "ray_samples": boundary_engine.ray_samples,
+                "low_coherence": boundary_engine.low_coherence,
+                "high_asymmetry": boundary_engine.high_asymmetry,
+                "minimum_tangent_alignment": boundary_engine.minimum_tangent_alignment,
+            },
             "sampling_weights": "half_edge_physical_length_on_8_connected_centerline",
             "cache_key": method_cache_key(image_sha256=image.source_sha256, valid_roi=roi, calibration=_calibration(image), method_id=MethodId.FATHOM_FIELD_GRAPH_V1, method_version="CLASSICAL_FIBER_FIELD_V1", parameters=dict(output.metadata)),
         },
