@@ -85,7 +85,7 @@ evidence; floating arrays are judged by max/mean absolute error, RMSE and explic
 | branch guard disk 3,n=0 | exact footprint dilation | identical | isolated real mask identical | `BITWISE_PARITY` | none observed |
 | spur 1 | R2026a local LUT/subiterations | all 512 neighborhoods exact | 16/16 bitwise on common skeleton input | `BITWISE_PARITY` | end-to-end input inherits `bwskel` |
 | `bwdist` and doubled EDT | SciPy EDT | max error ≤1.52e-5 px | numerical agreement | `NUMERICAL_PARITY` | MATLAB single vs Python double |
-| automatic histogram | Scott width with MATLAB nice-edge rounding | 8/8 vectors match `histogram` and `histcounts` | 16/16 counts and edges match on common diameters | `BITWISE_PARITY` | release-qualified to R2026a automatic binning |
+| automatic histogram | Scott width with MATLAB nice-edge rounding | 8/8 vectors match `histogram` and `histcounts` | 16/16 counts match bitwise; edges match numerically on common diameters | `NUMERICAL_PARITY` | float edge storage is compared with explicit tolerance; release-qualified to R2026a |
 | `gauss1` | exact formula, unconstrained `a1`/`b1`, nonnegative `c1` | synthetic and real common histograms | real `b1` max absolute residual 0.000610 | `NUMERICAL_PARITY` | optimizer/start-point paths can differ for degenerate fits |
 
 Probe counts used in this audit are 15 CLAHE patterns, 10 Canny patterns,

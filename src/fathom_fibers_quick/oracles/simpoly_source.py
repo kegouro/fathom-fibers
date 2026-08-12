@@ -63,7 +63,7 @@ SIMPOLY_STAGE_PARITY: dict[str, ParityClassification] = {
     "spur_1": ParityClassification.BITWISE_PARITY,
     "edge_distance_guard_55_px": ParityClassification.NUMERICAL_PARITY,
     "diameter_map_2x_edt": ParityClassification.NUMERICAL_PARITY,
-    "automatic_histogram": ParityClassification.BITWISE_PARITY,
+    "automatic_histogram": ParityClassification.NUMERICAL_PARITY,
     "prepend_two_zeros": ParityClassification.EXACT_SOURCE_RULE,
     "gauss1_fit": ParityClassification.NUMERICAL_PARITY,
     "main_result_b1": ParityClassification.EXACT_FORMULA,
