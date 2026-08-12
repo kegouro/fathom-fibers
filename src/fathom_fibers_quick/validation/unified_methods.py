@@ -83,10 +83,15 @@ def run_unified_campaign(
     dataset: Path,
     matlab_cache_root: Path | None = None,
     resume: bool = False,
+    case: str | None = None,
 ) -> DatasetMorphologyReport:
     paths = sorted([*dataset.glob("*.tif"), *dataset.glob("*.tiff")], key=lambda item: item.name)
     if len(paths) != EXPECTED_CASES:
         raise RuntimeError(f"Expected exactly {EXPECTED_CASES} TIFF files, found {len(paths)}")
+    if case is not None:
+        paths = [path for path in paths if path.name == case or path.stem == case]
+        if len(paths) != 1:
+            raise RuntimeError(f"Expected one canonical TIFF matching {case!r}, found {len(paths)}")
     output = _root(repo)
     runs = output / "runs"
     runs.mkdir(parents=True, exist_ok=True)
@@ -160,8 +165,18 @@ def generate_unified_report(repo: Path) -> Path:
     payloads = _load_cached_payloads(repo)
     output = _root(repo) / "latest"
     output.mkdir(parents=True, exist_ok=True)
-    method_ids = [MethodId.MATLAB_SIMPOLY.value, MethodId.PYTHON_SIMPOLY.value, MethodId.FATHOM_LOCAL.value]
-    colors = {MethodId.MATLAB_SIMPOLY.value: "#386cb0", MethodId.PYTHON_SIMPOLY.value: "#fdb462", MethodId.FATHOM_LOCAL.value: "#7fc97f"}
+    method_ids = [
+        MethodId.MATLAB_SIMPOLY.value,
+        MethodId.PYTHON_SIMPOLY.value,
+        MethodId.FATHOM_LOCAL.value,
+        MethodId.FATHOM_FIELD_GRAPH_V1.value,
+    ]
+    colors = {
+        MethodId.MATLAB_SIMPOLY.value: "#386cb0",
+        MethodId.PYTHON_SIMPOLY.value: "#fdb462",
+        MethodId.FATHOM_LOCAL.value: "#7fc97f",
+        MethodId.FATHOM_FIELD_GRAPH_V1.value: "#8c6bb1",
+    }
     figure, axis = plt.subplots(figsize=(8, 4.5))
     method_rows = []
     for method_id in method_ids:
@@ -203,10 +218,23 @@ def generate_unified_report(repo: Path) -> Path:
         for method, count, median, q25, q75, p05, p95 in method_rows
     )
     image_rows = []
+    field_rows = []
     for payload in payloads:
         statuses = ", ".join(f"{entry['method_id']}: {entry['status']}" for entry in payload.get("results", []))
         consensus = payload.get("consensus", {})
         image_rows.append(f"<tr><td>{html.escape(payload.get('image_id', 'unknown'))}</td><td>{html.escape(statuses)}</td><td>{html.escape(', '.join(consensus.get('participating_methods', [])) or '—')}</td></tr>")
+        field = next((entry for entry in payload.get("results", []) if entry["method_id"] == MethodId.FATHOM_FIELD_GRAPH_V1.value), None)
+        stats = field.get("native_statistics", {}) if field else {}
+        coherence = stats.get("mean_coherence")
+        nematic = stats.get("nematic_order_parameter")
+        coherence_text = "—" if coherence is None else f"{coherence:.4g}"
+        nematic_text = "—" if nematic is None else f"{nematic:.4g}"
+        field_rows.append(
+            f"<tr><td>{html.escape(payload.get('image_id', 'unknown'))}</td><td>{html.escape(field.get('status', 'NOT_RUN') if field else 'NOT_RUN')}</td>"
+            f"<td>{stats.get('sample_count', '—')}</td><td>{coherence_text}</td>"
+            f"<td>{nematic_text}</td>"
+            f"<td>{html.escape(str(stats.get('centerline_source', '—')))}</td></tr>"
+        )
     index = output / "index.html"
     index.write_text(f"""<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Unified Method Comparison</title>
 <style>body{{font:14px system-ui,sans-serif;margin:2rem;color:#20242a}}table{{border-collapse:collapse;width:100%;margin:1rem 0}}th,td{{border:1px solid #ccd2d8;padding:.4rem;text-align:left}}th{{background:#eef1f4}}.note{{border-left:4px solid #b7791f;background:#fff9e6;padding:.7rem}}</style></head><body>
@@ -216,6 +244,7 @@ def generate_unified_report(repo: Path) -> Path:
 <img src='ecdf.png' alt='ECDF comparison'><h2>Pairwise distribution distance</h2><table><tr><th>Left</th><th>Right</th><th>Median Wasserstein-1 (µm)</th><th>Images</th></tr>{wasserstein_rows}</table>
 <h2>Pairwise median-method difference</h2><table><tr><th>Left</th><th>Right</th><th>Median difference (µm)</th><th>Images</th></tr>{median_difference_rows}</table>
 <h2>16-image processing matrix</h2><table><tr><th>Image</th><th>Method states</th><th>Consensus participants</th></tr>{''.join(image_rows)}</table>
-<h2>Method limitations</h2><ul><li>Measurements represent projected 2-D geometry.</li><li>FATHOM_FIELD_GRAPH_V1 is registered as <code>EXPERIMENTAL_NOT_YET_MEASURING</code>; no graph, topology or fiber-instance values are fabricated.</li><li>Manual 5×5 remains <code>NOT_MEASURED</code> until actual accepted records exist.</li><li>Dataset display balances images; it does not blindly pool skeleton samples.</li></ul>
+<h2>Field diagnostics</h2><table><tr><th>Image</th><th>Status</th><th>N samples</th><th>Mean coherence</th><th>Nematic S</th><th>Centerline source</th></tr>{''.join(field_rows)}</table>
+<h2>Method limitations</h2><ul><li>Measurements represent projected 2-D geometry.</li><li>FATHOM_FIELD_GRAPH_V1 implements a field stage only: orientation and mask-derived EDT diameters are sampled on an explicit skeleton baseline. Graph, topology, crossing resolution and fibre instances are unavailable.</li><li>Manual 5×5 remains <code>NOT_MEASURED</code> until actual accepted records exist.</li><li>Dataset display balances images; it does not blindly pool skeleton samples.</li></ul>
 </body></html>""", encoding="utf-8")
     return index

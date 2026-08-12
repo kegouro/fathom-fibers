@@ -127,6 +127,7 @@ def main() -> None:
     )
     unified_campaign.add_argument("--matlab-cache-root", type=Path)
     unified_campaign.add_argument("--resume", action="store_true")
+    unified_campaign.add_argument("--case", help="Run one canonical case while preserving unified artifacts")
     campaign_sub.add_parser("unified-report", help="Render unified comparison HTML report")
 
     methods = sub.add_parser("methods", help="List unified scientific method backends")
@@ -206,7 +207,7 @@ def main() -> None:
             MethodId.MATLAB_SIMPOLY: ("GLOBAL_DIAMETER_DISTRIBUTION", "LOCAL_EDT_DIAMETERS", "MASK", "SKELETON"),
             MethodId.PYTHON_SIMPOLY: ("GLOBAL_DIAMETER_DISTRIBUTION", "LOCAL_EDT_DIAMETERS", "MASK", "SKELETON", "MATLAB_COMPATIBILITY_EVIDENCE"),
             MethodId.FATHOM_LOCAL: ("LOCAL_METROLOGY", "CROSS_SECTIONS", "MANUAL_REVIEW", "QUALITY_FLAGS"),
-            MethodId.FATHOM_FIELD_GRAPH_V1: ("ORIENTATION_FIELD", "LOCAL_RADIUS", "LOCAL_DIAMETER", "GRAPH", "CROSSINGS", "FIBER_INSTANCES", "TOPOLOGY"),
+            MethodId.FATHOM_FIELD_GRAPH_V1: ("MASK", "SKELETON", "ORIENTATION_FIELD", "LOCAL_RADIUS", "LOCAL_DIAMETER", "GLOBAL_DIAMETER_DISTRIBUTION"),
             MethodId.MANUAL_5X5_REFERENCE: ("MANUAL_REVIEW", "LOCAL_METROLOGY"),
             MethodId.CONSENSUS_PSEUDO_REFERENCE_V1: (),
         }
@@ -214,7 +215,7 @@ def main() -> None:
             {
                 "method_id": method.value,
                 "capabilities": capability_sets[method],
-                "status": "EXPERIMENTAL_NOT_YET_MEASURING" if method == MethodId.FATHOM_FIELD_GRAPH_V1 else None,
+                "status": "EXPERIMENTAL_FIELD_MEASURING" if method == MethodId.FATHOM_FIELD_GRAPH_V1 else None,
                 "note": "PARTIAL; KNOWN_LIBRARY_DIVERGENCE: bwskel" if method == MethodId.PYTHON_SIMPOLY else None,
             }
             for method in MethodId
@@ -300,6 +301,7 @@ def main() -> None:
                     dataset=args.dataset,
                     matlab_cache_root=cache_root if str(cache_root) else None,
                     resume=args.resume,
+                    case=args.case,
                 )
                 print(f"Unified campaign: {len(report.images)} complete, {len(report.failures)} failed")
             return

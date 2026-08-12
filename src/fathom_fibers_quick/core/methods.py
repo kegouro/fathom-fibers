@@ -27,6 +27,7 @@ class MethodStatus(str, Enum):
     UNAVAILABLE = "UNAVAILABLE"
     NOT_MEASURED = "NOT_MEASURED"
     EXPERIMENTAL_NOT_YET_MEASURING = "EXPERIMENTAL_NOT_YET_MEASURING"
+    EXPERIMENTAL_FIELD_MEASURING = "EXPERIMENTAL_FIELD_MEASURING"
     FAILED = "FAILED"
 
 
@@ -121,7 +122,7 @@ class MethodResult:
     status: MethodStatus = MethodStatus.NOT_RUN
     native_estimand: Estimand | None = None
     native_result: float | None = None
-    native_statistics: Mapping[str, float | int | None] = field(default_factory=dict)
+    native_statistics: Mapping[str, Any] = field(default_factory=dict)
     native_distribution: DiameterDistribution | None = None
     common_distribution: DiameterDistribution | None = None
     fiber_balanced_distribution: DiameterDistribution | None = None
@@ -129,6 +130,7 @@ class MethodResult:
     centerline: np.ndarray | None = None
     orientation_field: tuple[np.ndarray, np.ndarray] | None = None
     radius_map: np.ndarray | None = None
+    local_samples: Mapping[str, np.ndarray] | None = None
     fiber_instances: Mapping[str, Any] | None = None
     fiber_graph: Mapping[str, Any] | None = None
     quality_flags: tuple[str, ...] = ()

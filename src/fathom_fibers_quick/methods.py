@@ -14,6 +14,7 @@ import numpy as np
 from scipy.io import loadmat
 
 from .core.contracts import ScientificImage
+from .core.fiber_field import ClassicalFiberField
 from .core.methods import (
     Capability,
     CapabilityState,
@@ -126,6 +127,20 @@ def python_simpoly_adapter(
     *,
     roi_bbox: tuple[int, int, int, int] | None = None,
 ) -> MethodResult:
+    return python_simpoly_adapter_with_intermediates(engine, image, roi_bbox=roi_bbox)[0]
+
+
+def python_simpoly_adapter_with_intermediates(
+    engine: FathomEngine,
+    image: ScientificImage,
+    *,
+    roi_bbox: tuple[int, int, int, int] | None = None,
+) -> tuple[MethodResult, SIMPolyIntermediates]:
+    """Run Python SIMPoly once and expose its mask to sibling adapters.
+
+    The field backend receives the resulting mask as an explicit, provenance
+    tracked input; it does not alter SIMPoly or invoke MATLAB at runtime.
+    """
     started = time.monotonic()
     roi = _roi(image, roi_bbox)
     result, inter = engine.run_simpoly(image, profile=PROFILE_CONTROLLED_INPUT_V1, roi_bbox=roi)
@@ -139,7 +154,7 @@ def python_simpoly_adapter(
             "runtime_seconds": time.monotonic() - started,
             "cache_key": method_cache_key(image_sha256=image.source_sha256, valid_roi=roi, calibration=_calibration(image), method_id=MethodId.PYTHON_SIMPOLY, method_version=PROFILE_CONTROLLED_INPUT_V1, parameters={}),
         },
-    )
+    ), inter
 
 
 def _fathom_distribution(image: ScientificImage, candidates: Iterable[Any]) -> DiameterDistribution | None:
@@ -187,21 +202,109 @@ def fathom_local_adapter(
     )
 
 
-def field_graph_placeholder(image: ScientificImage, *, roi_bbox: tuple[int, int, int, int] | None = None) -> MethodResult:
+def classical_field_adapter(
+    image: ScientificImage,
+    *,
+    mask: np.ndarray,
+    roi_bbox: tuple[int, int, int, int] | None = None,
+    field: ClassicalFiberField | None = None,
+) -> MethodResult:
+    """Adapt an explicit mask and scientific image to Field V1 metrology.
+
+    V1 intentionally uses a documented ``skimage.skeletonize`` sampling
+    baseline.  It provides neither fibre identities nor graph topology.
+    """
+    started = time.monotonic()
+    roi = _roi(image, roi_bbox)
+    x0, y0, x1, y1 = roi
+    body = np.asarray(image.gray[y0:y1, x0:x1], dtype=float)
+    binary = np.asarray(mask, dtype=bool)
+    if binary.shape != body.shape:
+        raise ValueError("field mask must match the selected image body")
+    backend = field or ClassicalFiberField()
+    output = backend.infer_field(
+        body,
+        mask=binary,
+        pixel_size_xy_m=(image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m),
+    )
+    centerline = np.asarray(output.centerline, dtype=bool)
+    rows, cols = np.nonzero(centerline)
+    weights_m = _length_weights(centerline, image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m)
+    diameter_um = np.asarray(output.diameter_m, dtype=float)[centerline] * 1e6
+    radius_um = np.asarray(output.radius_m, dtype=float)[centerline] * 1e6
+    coherence = np.asarray(output.coherence, dtype=float)[centerline]
+    qx = np.asarray(output.orientation_qx, dtype=float)[centerline]
+    qy = np.asarray(output.orientation_qy, dtype=float)[centerline]
+    valid = np.isfinite(diameter_um) & np.isfinite(weights_m) & (weights_m > 0) & (diameter_um > 0)
+    diameter_um, radius_um, weights_m = diameter_um[valid], radius_um[valid], weights_m[valid]
+    coherence, qx, qy, rows, cols = coherence[valid], qx[valid], qy[valid], rows[valid], cols[valid]
+    common = (
+        DiameterDistribution(diameter_um, weights_m, "um", Estimand.COMMON_LENGTH_WEIGHTED_DIAMETER, MethodId.FATHOM_FIELD_GRAPH_V1)
+        if diameter_um.size else None
+    )
+    native = common
+    vector_x = float(np.average(qx, weights=weights_m)) if weights_m.size else 0.0
+    vector_y = float(np.average(qy, weights=weights_m)) if weights_m.size else 0.0
+    nematic = float(np.hypot(vector_x, vector_y)) if weights_m.size else None
+    mean_coherence = float(np.average(coherence, weights=weights_m)) if weights_m.size else None
+    status = MethodStatus.EXPERIMENTAL_FIELD_MEASURING if common is not None else MethodStatus.FAILED
+    flags = ["EXPERIMENTAL_FIELD_MEASURING", "FIELD_STAGE_IMPLEMENTED", "GRAPH_STAGE_NOT_IMPLEMENTED"]
+    if not diameter_um.size:
+        flags.append("NO_CENTERLINE_DIAMETER_SAMPLES")
     return MethodResult(
-        MethodId.FATHOM_FIELD_GRAPH_V1, "FATHOM_FIELD_GRAPH_V1", image.image_id, _calibration(image), _roi(image, roi_bbox), "um",
+        MethodId.FATHOM_FIELD_GRAPH_V1, "CLASSICAL_FIBER_FIELD_V1", image.image_id, _calibration(image), roi, "um",
         MethodCapabilities({
-            Capability.ORIENTATION_FIELD: CapabilityState.EXPERIMENTAL,
-            Capability.LOCAL_RADIUS: CapabilityState.EXPERIMENTAL,
-            Capability.LOCAL_DIAMETER: CapabilityState.EXPERIMENTAL,
+            Capability.MASK: CapabilityState.AVAILABLE,
+            Capability.SKELETON: CapabilityState.AVAILABLE,
+            Capability.ORIENTATION_FIELD: CapabilityState.AVAILABLE,
+            Capability.LOCAL_RADIUS: CapabilityState.AVAILABLE,
+            Capability.LOCAL_DIAMETER: CapabilityState.AVAILABLE,
+            Capability.GLOBAL_DIAMETER_DISTRIBUTION: CapabilityState.AVAILABLE,
             Capability.GRAPH: CapabilityState.UNAVAILABLE,
             Capability.CROSSINGS: CapabilityState.UNAVAILABLE,
             Capability.FIBER_INSTANCES: CapabilityState.UNAVAILABLE,
             Capability.TOPOLOGY: CapabilityState.UNAVAILABLE,
         }),
-        MethodStatus.EXPERIMENTAL_NOT_YET_MEASURING,
-        quality_flags=("EXPERIMENTAL_NOT_YET_MEASURING",),
-        provenance={"reason": "Contract registered; no field/graph measurement is emitted in V1."},
+        status,
+        Estimand.COMMON_LENGTH_WEIGHTED_DIAMETER,
+        float(np.median(diameter_um)) if diameter_um.size else None,
+        {
+            "sample_count": int(diameter_um.size),
+            "mean_coherence": mean_coherence,
+            "nematic_order_parameter": nematic,
+            "radius_sample_median_um": float(np.median(radius_um)) if radius_um.size else None,
+            "centerline_source": output.metadata["centerline_algorithm"],
+            "radius_estimator": output.metadata["radius_method"],
+        },
+        native,
+        common,
+        mask=binary,
+        centerline=centerline,
+        orientation_field=(np.asarray(output.orientation_qx), np.asarray(output.orientation_qy)),
+        radius_map=np.asarray(output.radius_m),
+        local_samples={
+            "x_m": (cols + x0) * image.calibration.pixel_size_x_m,
+            "y_m": (rows + y0) * image.calibration.pixel_size_y_m,
+            "qx": qx,
+            "qy": qy,
+            "coherence": coherence,
+            "radius_um": radius_um,
+            "diameter_um": diameter_um,
+            "arc_length_weight_m": weights_m,
+        },
+        quality_flags=tuple(flags), confidence=mean_coherence,
+        runtime_seconds=time.monotonic() - started,
+        provenance={
+            "field_stage": "FIELD_STAGE_IMPLEMENTED",
+            "graph_stage": "GRAPH_STAGE_NOT_IMPLEMENTED",
+            "mask_source": "PYTHON_SIMPOLY_CONTROLLED_INPUT_THICKENED_MASK",
+            "mask_profile": PROFILE_CONTROLLED_INPUT_V1,
+            "centerline_source": output.metadata["centerline_algorithm"],
+            "orientation_method": output.metadata["orientation_method"],
+            "radius_method": output.metadata["radius_method"],
+            "sampling_weights": "half_edge_physical_length_on_8_connected_centerline",
+            "cache_key": method_cache_key(image_sha256=image.source_sha256, valid_roi=roi, calibration=_calibration(image), method_id=MethodId.FATHOM_FIELD_GRAPH_V1, method_version="CLASSICAL_FIBER_FIELD_V1", parameters=dict(output.metadata)),
+        },
     )
 
 
@@ -255,9 +358,36 @@ def matlab_simpoly_cached_adapter(
     case_id = case["case_id"]
     run_root = root.parent / "matlab-oracle/runs/r2026a-latest" / case_id / "controlled"
     summary_path, inter_path = run_root / "summary.json", run_root / "intermediates.mat"
-    if not summary_path.exists() or not inter_path.exists():
+    if not summary_path.exists():
         return MethodResult(MethodId.MATLAB_SIMPOLY, "MATLAB_R2026A_CACHE", image.image_id, _calibration(image), _roi(image, roi_bbox), "um", _simply_capabilities(matlab=True), MethodStatus.NOT_RUN, quality_flags=("MATLAB_CACHE_CASE_INCOMPLETE",), provenance={"case_id": case_id})
     summary = json.loads(summary_path.read_text())
+    if not inter_path.exists():
+        # The 16-case oracle cache deliberately retained compact summaries but
+        # not private full intermediates.  Keep its real native MATLAB result
+        # visible without fabricating a length-weighted common distribution.
+        return MethodResult(
+            MethodId.MATLAB_SIMPOLY, "MATLAB_R2026A_SOURCE_COMPAT", image.image_id,
+            _calibration(image), requested_roi, "um", _simply_capabilities(matlab=True),
+            MethodStatus.COMPLETE, Estimand.SIMPOLY_NATIVE_GAUSS1,
+            summary.get("gauss_b1"),
+            {
+                "gauss_a1": summary.get("gauss_a1"),
+                "gauss_b1": summary.get("gauss_b1"),
+                "gauss_c1": summary.get("gauss_c1"),
+                "legacy_source_reported_stdev": summary.get("source_reported_stdev"),
+                "mathematical_sigma": summary.get("mathematical_sigma"),
+                "diameter_n": summary.get("diameter_n"),
+                "diameter_median": summary.get("diameter_median"),
+            },
+            quality_flags=("MATLAB_RAW_DIAMETERS_UNAVAILABLE", "COMMON_LENGTH_WEIGHT_UNAVAILABLE"),
+            provenance={
+                "case_id": case_id,
+                "matlab_version": "R2026a",
+                "source_matlab_sha256": manifest.get("source_matlab_sha256"),
+                "cache_root": str(root),
+                "cache_representation": "SUMMARY_ONLY_NO_COMMON_DISTRIBUTION",
+            },
+        )
     arrays = loadmat(inter_path)
     skeleton = np.asarray(arrays["SK_valid"], bool)
     px = np.asarray(arrays["diameters"], float).ravel()
@@ -269,4 +399,4 @@ def matlab_simpoly_cached_adapter(
     return MethodResult(MethodId.MATLAB_SIMPOLY, "MATLAB_R2026A_SOURCE_COMPAT", image.image_id, _calibration(image), _roi(image, roi_bbox), "um", _simply_capabilities(matlab=True), MethodStatus.COMPLETE, Estimand.SIMPOLY_NATIVE_GAUSS1, summary.get("gauss_b1"), {"gauss_a1": summary.get("gauss_a1"), "gauss_b1": summary.get("gauss_b1"), "gauss_c1": summary.get("gauss_c1"), "legacy_source_reported_stdev": summary.get("source_reported_stdev"), "mathematical_sigma": summary.get("mathematical_sigma")}, native, common, mask=np.asarray(arrays["BW_thickened"], bool), centerline=skeleton, quality_flags=(() if common else ("COMMON_LENGTH_WEIGHT_UNAVAILABLE",)), provenance={"case_id": case_id, "matlab_version": "R2026a", "source_matlab_sha256": manifest.get("source_matlab_sha256"), "cache_root": str(root)})
 
 
-__all__ = ["fathom_local_adapter", "field_graph_placeholder", "manual_adapter", "matlab_simpoly_cached_adapter", "python_simpoly_adapter"]
+__all__ = ["classical_field_adapter", "fathom_local_adapter", "manual_adapter", "matlab_simpoly_cached_adapter", "python_simpoly_adapter", "python_simpoly_adapter_with_intermediates"]

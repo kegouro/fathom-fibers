@@ -26,11 +26,11 @@ from .measurement_geometry import (
 )
 from .measurement_records import MeasurementKind, MeasurementRecord
 from .methods import (
+    classical_field_adapter,
     fathom_local_adapter,
-    field_graph_placeholder,
     manual_adapter,
     matlab_simpoly_cached_adapter,
-    python_simpoly_adapter,
+    python_simpoly_adapter_with_intermediates,
 )
 from .model import Calibration
 from .oracles.simpoly_source import (
@@ -289,14 +289,21 @@ class FathomEngine:
         MATLAB data are consumed only from a validated cache; this call never
         launches MATLAB or changes any scientific-method parameters.
         """
+        python_result, intermediates = python_simpoly_adapter_with_intermediates(
+            self, image, roi_bbox=roi_bbox
+        )
         return compare_method_results(
             (
                 matlab_simpoly_cached_adapter(
                     image, roi_bbox=roi_bbox, cache_root=matlab_cache_root
                 ),
-                python_simpoly_adapter(self, image, roi_bbox=roi_bbox),
+                python_result,
                 fathom_local_adapter(self, image, roi_bbox=roi_bbox),
-                field_graph_placeholder(image, roi_bbox=roi_bbox),
+                classical_field_adapter(
+                    image,
+                    roi_bbox=roi_bbox,
+                    mask=intermediates.thickened_mask,
+                ),
                 manual_adapter(image, manual_measurements, roi_bbox=roi_bbox),
             )
         )

@@ -97,7 +97,8 @@ def test_engine_unified_comparison_has_honest_missing_method_states():
     comparison = engine.compare_all_methods(image, roi_bbox=(0, 0, 128, 90))
     states = {result.method_id: result.status for result in comparison.results}
     assert states[MethodId.MATLAB_SIMPOLY] == MethodStatus.NOT_RUN
-    assert states[MethodId.FATHOM_FIELD_GRAPH_V1] == MethodStatus.EXPERIMENTAL_NOT_YET_MEASURING
+    assert states[MethodId.FATHOM_FIELD_GRAPH_V1] == MethodStatus.EXPERIMENTAL_FIELD_MEASURING
+    assert MethodId.FATHOM_FIELD_GRAPH_V1 in comparison.summaries
     assert states[MethodId.MANUAL_5X5_REFERENCE] == MethodStatus.NOT_MEASURED
     assert MethodId.PYTHON_SIMPOLY in comparison.summaries
 
@@ -130,4 +131,4 @@ def test_qt_comparison_table_shows_not_run_and_experimental_states(qtbot):
     panel.set_unified_result(engine.compare_all_methods(image), image)
     statuses = [panel.table.item(row, 1).text() for row in range(panel.table.rowCount())]
     assert "NOT_RUN" in statuses
-    assert "EXPERIMENTAL_NOT_YET_MEASURING" in statuses
+    assert "EXPERIMENTAL_FIELD_MEASURING" in statuses

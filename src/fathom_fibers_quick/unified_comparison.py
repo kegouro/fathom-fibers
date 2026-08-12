@@ -47,7 +47,8 @@ def compare_method_results(results: Iterable[MethodResult]) -> UnifiedMethodComp
     comparable = [
         result.common_distribution
         for result in all_results
-        if result.status == MethodStatus.COMPLETE and result.common_distribution is not None
+        if result.status in {MethodStatus.COMPLETE, MethodStatus.EXPERIMENTAL_FIELD_MEASURING}
+        and result.common_distribution is not None
         and result.common_distribution.estimand == Estimand.COMMON_LENGTH_WEIGHTED_DIAMETER
     ]
     bins = common_histogram_edges(comparable)
