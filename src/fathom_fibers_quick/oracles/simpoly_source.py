@@ -8,6 +8,8 @@ import numpy as np
 from scipy import ndimage, optimize
 from skimage import exposure, feature, filters, morphology
 
+from .matlab_compat import matlab_adapthisteq_compat
+
 PROFILE_SOURCE_COMPAT_V1 = "SIMPOLY_SOURCE_COMPAT_V1"
 PROFILE_CONTROLLED_INPUT_V1 = "SIMPOLY_CONTROLLED_INPUT_V1"
 
@@ -421,11 +423,14 @@ def run_simpoly_source_pipeline(
     # Step 2 & 3. Contrast Enhancement: adapthisteq + histeq
     norm_crop = _as_matlab_unit_interval(I_crop)
 
-    # MATLAB's default is 8x8 *tiles*, not an 8-pixel kernel.  scikit-image's
-    # default kernel derives the same tile count; interpolation remains a close
-    # reimplementation and is quantified by the R2026a oracle.
-    I_clahe = exposure.equalize_adapthist(norm_crop, kernel_size=None, clip_limit=0.01, nbins=256)
-    I_clahe = _quantize_like_matlab_image(I_clahe, I_crop.dtype)
+    if I_crop.dtype in (np.dtype(np.uint8), np.dtype(np.uint16)):
+        I_clahe = _as_matlab_unit_interval(matlab_adapthisteq_compat(I_crop))
+    else:
+        # The canonical Zeiss profile is uint8. Floating MATLAB input remains
+        # an explicitly unverified fallback rather than silently coercing class.
+        I_clahe = exposure.equalize_adapthist(
+            norm_crop, kernel_size=None, clip_limit=0.01, nbins=256
+        )
     I_equalized = _matlab_histeq_default(I_clahe, I_crop.dtype)
 
     # Step 4 & 5. Grayscale erosion & Morphological Reconstruction

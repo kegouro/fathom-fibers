@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from fathom_fibers_quick.oracles.matlab_compat import matlab_adapthisteq_compat
 from fathom_fibers_quick.oracles.simpoly_source import (
     _bwareaopen_4_connected,
     _matlab_disk5_footprint,
@@ -105,6 +107,18 @@ def test_matlab_histeq_mapping_has_64_target_levels() -> None:
     assert len(np.unique(result)) == 64
     assert result.min() == 0
     assert result.max() == 1
+
+
+def test_matlab_adapthisteq_uint8_behavioral_fixtures() -> None:
+    constant = np.full((64, 64), 73, dtype=np.uint8)
+    assert np.array_equal(matlab_adapthisteq_compat(constant), np.full_like(constant, 84))
+
+    gradient_row = np.floor(np.linspace(0, 255, 64) + 0.5).astype(np.uint8)
+    gradient = np.tile(gradient_row, (64, 1))
+    result = matlab_adapthisteq_compat(gradient)
+    assert hashlib.sha256(result.tobytes(order="C")).hexdigest() == (
+        "f18509a992fe6256c1914cf14f15116263beb44f5f9989139945d0e369238511"
+    )
 
 
 def test_manual_5x5_reference_does_not_force_numeric_values() -> None:
