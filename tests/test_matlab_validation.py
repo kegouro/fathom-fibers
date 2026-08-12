@@ -8,7 +8,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from fathom_fibers_quick.oracles.matlab_compat import matlab_adapthisteq_compat
+from fathom_fibers_quick.oracles.matlab_compat import (
+    matlab_adapthisteq_compat,
+    matlab_canny_compat,
+)
 from fathom_fibers_quick.oracles.simpoly_source import (
     _bwareaopen_4_connected,
     _matlab_disk5_footprint,
@@ -118,6 +121,23 @@ def test_matlab_adapthisteq_uint8_behavioral_fixtures() -> None:
     result = matlab_adapthisteq_compat(gradient)
     assert hashlib.sha256(result.tobytes(order="C")).hexdigest() == (
         "f18509a992fe6256c1914cf14f15116263beb44f5f9989139945d0e369238511"
+    )
+
+
+def test_matlab_canny_behavioral_fixtures() -> None:
+    vertical = np.zeros((128, 128), dtype=np.uint8)
+    vertical[:, 64:] = 255
+    result = matlab_canny_compat(vertical)
+    assert np.count_nonzero(result) == 252
+    assert hashlib.sha256(result.astype(np.uint8).tobytes(order="C")).hexdigest() == (
+        "f84e1ca7b02c6cd3d2355b5fa6068a8be4cec2303401cf8f33462b3657d14218"
+    )
+
+    rectangle = np.zeros((128, 128), dtype=np.uint8)
+    rectangle[31:96, 31:96] = 255
+    result = matlab_canny_compat(rectangle)
+    assert hashlib.sha256(result.astype(np.uint8).tobytes(order="C")).hexdigest() == (
+        "64696f586e230e2e513915224bc05e47347cb8b6836ab7dac4c1e194a0df9056"
     )
 
 

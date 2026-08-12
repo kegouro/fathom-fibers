@@ -6,9 +6,9 @@ from enum import Enum
 
 import numpy as np
 from scipy import ndimage, optimize
-from skimage import exposure, feature, filters, morphology
+from skimage import exposure, filters, morphology
 
-from .matlab_compat import matlab_adapthisteq_compat
+from .matlab_compat import matlab_adapthisteq_compat, matlab_canny_compat
 
 PROFILE_SOURCE_COMPAT_V1 = "SIMPOLY_SOURCE_COMPAT_V1"
 PROFILE_CONTROLLED_INPUT_V1 = "SIMPOLY_CONTROLLED_INPUT_V1"
@@ -443,8 +443,10 @@ def run_simpoly_source_pipeline(
     I_reconstructed = morphology.reconstruction(marker, I_equalized)
 
     # Step 6 & 7. Canny Edge Detection & Small edge removal
-    canny_edges = feature.canny(
-        I_reconstructed, low_threshold=config.canny_low, high_threshold=config.canny_high
+    canny_edges = matlab_canny_compat(
+        I_reconstructed,
+        low_threshold=config.canny_low,
+        high_threshold=config.canny_high,
     )
     canny_clean = _bwareaopen_4_connected(canny_edges, config.minimum_edge_area)
 
