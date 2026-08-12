@@ -13,16 +13,38 @@ from .contracts import (
     ScientificImage,
     ScientificMeasurement,
 )
+from .fiber_field import FiberFieldResult, FiberGraphBuilder, FiberPerceptionBackend
+from .methods import (
+    Capability,
+    CapabilityState,
+    DiameterDistribution,
+    Estimand,
+    MethodCapabilities,
+    MethodId,
+    MethodResult,
+    MethodStatus,
+)
 
 __all__ = [
     "Calibration",
+    "Capability",
+    "CapabilityState",
+    "DiameterDistribution",
+    "Estimand",
     "FathomAnalysisResult",
+    "FiberFieldResult",
+    "FiberGraphBuilder",
+    "FiberPerceptionBackend",
     "ImageDocument",
     "MeasurementKind",
     "MeasurementRecord",
     "MeasurementStatus",
+    "MethodCapabilities",
     "MethodComparisonResult",
     "MethodComparisonRow",
+    "MethodId",
+    "MethodResult",
+    "MethodStatus",
     "Project",
     "ScientificImage",
     "ScientificMeasurement",
