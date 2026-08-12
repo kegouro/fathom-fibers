@@ -16,6 +16,7 @@ from fathom_fibers_quick.oracles.simpoly_source import (
     _bwareaopen_4_connected,
     _matlab_disk5_footprint,
     _matlab_histeq_default,
+    _matlab_histogram_auto,
     bwmorph_branchpoints,
     bwmorph_spur,
     bwmorph_thicken,
@@ -139,6 +140,13 @@ def test_matlab_canny_behavioral_fixtures() -> None:
     assert hashlib.sha256(result.astype(np.uint8).tobytes(order="C")).hexdigest() == (
         "64696f586e230e2e513915224bc05e47347cb8b6836ab7dac4c1e194a0df9056"
     )
+
+
+def test_matlab_histogram_auto_scott_nice_edges() -> None:
+    values = np.linspace(-3, 8, 10_000)
+    counts, edges = _matlab_histogram_auto(values)
+    assert np.array_equal(edges, np.arange(-3, 8.5, 0.5))
+    assert counts.sum() == values.size
 
 
 def test_manual_5x5_reference_does_not_force_numeric_values() -> None:
