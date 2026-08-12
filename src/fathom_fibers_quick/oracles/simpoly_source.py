@@ -278,6 +278,11 @@ def _as_matlab_unit_interval(image: np.ndarray) -> np.ndarray:
     return result
 
 
+def _matlab_imbinarize(image: np.ndarray, level: float) -> np.ndarray:
+    """Apply MATLAB's foreground rule: values strictly above the threshold."""
+    return np.asarray(image) > level
+
+
 def _quantize_like_matlab_image(values: np.ndarray, dtype: np.dtype) -> np.ndarray:
     """Return a normalized array after MATLAB-style integer class quantization."""
     if not np.issubdtype(dtype, np.integer):
@@ -455,7 +460,7 @@ def run_simpoly_source_pipeline(
     # Step 9 & 10. Otsu threshold computed from original cropped image I + 0.1, applied to I_equalized
     thresh_val = _matlab_graythresh(norm_crop, I_crop.dtype) + 0.1
     thresh_val = min(max(thresh_val, 0.0), 1.0)
-    BW_threshold = I_equalized >= thresh_val
+    BW_threshold = _matlab_imbinarize(I_equalized, thresh_val)
 
     # Step 11. Closing disk radius 1
     BW_closed = matlab_closing_compat(

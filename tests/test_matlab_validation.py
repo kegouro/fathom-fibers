@@ -17,6 +17,7 @@ from fathom_fibers_quick.oracles.simpoly_source import (
     _matlab_disk5_footprint,
     _matlab_histeq_default,
     _matlab_histogram_auto,
+    _matlab_imbinarize,
     bwmorph_branchpoints,
     bwmorph_spur,
     bwmorph_thicken,
@@ -147,6 +148,11 @@ def test_matlab_histogram_auto_scott_nice_edges() -> None:
     counts, edges = _matlab_histogram_auto(values)
     assert np.array_equal(edges, np.arange(-3, 8.5, 0.5))
     assert counts.sum() == values.size
+
+
+def test_matlab_imbinarize_excludes_values_equal_to_threshold() -> None:
+    values = np.asarray([0.4, 0.5, 0.6])
+    assert np.array_equal(_matlab_imbinarize(values, 0.5), [False, False, True])
 
 
 def test_manual_5x5_reference_does_not_force_numeric_values() -> None:
