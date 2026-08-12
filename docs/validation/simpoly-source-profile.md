@@ -80,7 +80,7 @@ evidence; floating arrays are judged by max/mean absolute error, RMSE and explic
 | thin 4 | scikit thin | identical | isolated real mask identical | `BITWISE_PARITY` | none on tested input |
 | median loop | SciPy median, count stop | identical; 67 iterations | isolated real mask identical | `BITWISE_PARITY` | stop is count equality, not array equality |
 | thicken 4 | R2026a local LUT/subiterations | all 512 neighborhoods exact | 16/16 bitwise on common input | `BITWISE_PARITY` | none observed |
-| `bwskel` | scikit Zhang skeletonization | 74-shape corpus compared with four candidates | median Dice 0.233 on common real masks | `KNOWN_LIBRARY_DIVERGENCE` | no tested candidate reproduces MATLAB tie-breaking/topology |
+| `bwskel` | scikit Zhang skeletonization | 653 systematic shapes; 451 development / 202 holdout | retained candidate: median valid-skeleton Dice 0.236 on 16 common real masks | `KNOWN_LIBRARY_DIVERGENCE` | a projected Lee candidate improved overlap but degraded final `b1` systematically and was rejected |
 | branchpoints | R2026a local LUT | all 512 neighborhoods exact | 16/16 bitwise on common skeleton input | `BITWISE_PARITY` | end-to-end input inherits `bwskel` |
 | branch guard disk 3,n=0 | exact footprint dilation | identical | isolated real mask identical | `BITWISE_PARITY` | none observed |
 | spur 1 | R2026a local LUT/subiterations | all 512 neighborhoods exact | 16/16 bitwise on common skeleton input | `BITWISE_PARITY` | end-to-end input inherits `bwskel` |
@@ -90,7 +90,7 @@ evidence; floating arrays are judged by max/mean absolute error, RMSE and explic
 
 Probe counts used in this audit are 15 CLAHE patterns, 10 Canny patterns,
 3,584 exhaustive 3×3 morphology neighborhoods (512 for each of seven
-operations), 74 `bwskel` shapes, 8 histogram/fit vectors, and all 16 canonical
+operations), 653 `bwskel` shapes, 8 histogram/fit vectors, and all 16 canonical
 TIFF bodies. Real-image common-input checks are reported separately from
 end-to-end propagation.
 
@@ -123,17 +123,24 @@ The 2026-08-11 audit corrected these deviations in the prior Python port:
 - `imbinarize` now uses the demonstrated strict-foreground rule (`Ihist > level`),
   excluding samples exactly equal to the threshold.
 
-`bwskel` remains the material compatibility boundary. Zhang, Lee 2-D, Lee 3-D,
-converged `thin`, and medial-axis candidates were tested on the same MATLAB
-outputs; none justified replacement of the existing source profile primitive.
-The converged-thin candidate improved overlap on these images but was rejected
-because better Dice is not evidence that it implements `bwskel`.
+`bwskel` remains the material compatibility boundary. The installed R2026a
+wrapper was inspected directly: for a 2-D mask it pads a one-voxel-deep volume
+and calls the protected `images.internal.builtins.skel3D` implementation. The
+built-in itself was not inspected or decompiled. MATLAB preserved input
+components and Euler characteristic in all 653 probes, was translation invariant
+in 33/33 tie probes, but observably broke rotation/reflection equivariance. Those
+results support directional topology-preserving deletion with implementation-
+specific tie-breaking.
 
-This boundary is explicitly release-dependent. MathWorks documents a changed
-2-D `bwskel` implementation in R2026a: it now skeletonizes in two dimensions,
-uses 4-connectivity, and no longer pads a 2-D image into a 3-D volume. Therefore
-the Lee-3D behavior associated with earlier releases is not a valid R2026a
-substitute. The present evidence targets the installed R2026a Update 4 oracle.
+A projected Lee/Kashyap/Chu candidate was therefore tested with exhaustive 512-
+neighborhood topology predicates, six directional passes and four parity
+subfields. It improved development mean Dice from 0.837 to 0.880 and holdout mean
+Dice from 0.798 to 0.830, with zero topology failures in both splits. On the 16
+common real masks it improved median valid-skeleton Dice from 0.236 to 0.281, but
+degraded median final `b1` difference from 4.780% to 8.903% and reduced cases
+within 5% from 9/16 to 0/16. It was rejected. This shows that the public Lee
+algorithm family explains useful invariants but does not reproduce the protected
+R2026a tie-breaking closely enough to replace the retained Zhang approximation.
 
 ### Reconstruction deprecation warning
 
