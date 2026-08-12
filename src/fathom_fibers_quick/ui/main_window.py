@@ -30,6 +30,7 @@ from ..exporters import export_csv
 from ..measurement_records import MeasurementStatus
 from ..oracles.simpoly_source import PROFILE_CONTROLLED_INPUT_V1, PROFILE_SOURCE_COMPAT_V1
 from ..project_io import SourceVerificationStatus, verify_project_source
+from ..unified_comparison import UnifiedMethodComparison
 from .commands import HistoryBridge
 from .tasks import AnalysisTask
 from .widgets import (
@@ -560,11 +561,14 @@ class MainWindow(QMainWindow):
     def _run_comparison(self) -> None:
         if self.session.image is None or self.active_task is not None:
             return
-        self._start_task(self.session.compare_methods, self._comparison_done)
+        self._start_task(self.session.compare_all_methods, self._comparison_done)
 
-    def _comparison_done(self, result: MethodComparisonResult) -> None:
+    def _comparison_done(self, result: MethodComparisonResult | UnifiedMethodComparison) -> None:
         if self.session.image is not None:
-            self.comparison_panel.set_result(result, self.session.image)
+            if isinstance(result, UnifiedMethodComparison):
+                self.comparison_panel.set_unified_result(result, self.session.image)
+            else:
+                self.comparison_panel.set_result(result, self.session.image)
         self.analysis_panel.set_running(False, "Method comparison complete")
 
     def _run_batch_action(self, action: str) -> None:

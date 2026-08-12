@@ -32,7 +32,9 @@ from PySide6.QtWidgets import (
 
 from ...application import ProjectSession
 from ...core.contracts import MethodComparisonResult, ScientificImage
+from ...core.distributions import summarize_distribution
 from ...measurement_records import MeasurementKind, MeasurementRecord, MeasurementStatus
+from ...unified_comparison import UnifiedMethodComparison
 from ...validation.manual_review import GridCellStatus, Manual5x5Review
 from ..models import MeasurementFilterModel, MeasurementTableModel, ProjectTreeModel
 from ..models.project_tree import ID_ROLE, NODE_ROLE
@@ -336,13 +338,16 @@ class ComparisonPanel(QWidget):
 
     HEADERS = (
         "Method",
+        "Status",
         "Estimand",
         "N",
-        "Mean px",
-        "Median px",
-        "Main value px",
-        "Difference px",
-        "Relative %",
+        "Mean",
+        "Median",
+        "P05",
+        "P95",
+        "Native result",
+        "Confidence",
+        "Runtime s",
         "Flags",
     )
 
@@ -372,20 +377,20 @@ class ComparisonPanel(QWidget):
         for row_index, row in enumerate(result.rows):
             values = (
                 row.method,
+                "COMPLETE",
                 row.estimand,
                 row.n,
                 row.mean_px,
                 row.median_px,
+                None,
+                None,
                 row.main_reported_px,
-                row.difference_px,
-                row.relative_difference_percent,
+                None,
+                None,
                 ", ".join(row.flags),
             )
             for column, value in enumerate(values):
-                if isinstance(value, float):
-                    text = f"{value:.5g}"
-                else:
-                    text = "—" if value is None else str(value)
+                text = f"{value:.5g}" if isinstance(value, float) else "—" if value is None else str(value)
                 self.table.setItem(row_index, column, QTableWidgetItem(text))
         self.table.resizeColumnsToContents()
         x0, y0, x1, y1 = result.roi_bbox
@@ -395,10 +400,8 @@ class ComparisonPanel(QWidget):
         for candidate in result.fathom.candidates:
             for proposal in candidate.proposed_measurements:
                 painter.drawLine(
-                    round(proposal.p1[0] - x0),
-                    round(proposal.p1[1] - y0),
-                    round(proposal.p2[0] - x0),
-                    round(proposal.p2[1] - y0),
+                    round(proposal.p1[0] - x0), round(proposal.p1[1] - y0),
+                    round(proposal.p2[0] - x0), round(proposal.p2[1] - y0),
                 )
         painter.end()
         pixmaps = {
@@ -409,13 +412,52 @@ class ComparisonPanel(QWidget):
         }
         for name, pixmap in pixmaps.items():
             self.preview_labels[name].setPixmap(
-                pixmap.scaled(
-                    500,
-                    260,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
+                pixmap.scaled(500, 260, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             )
+
+    def set_unified_result(self, comparison: UnifiedMethodComparison, image: ScientificImage) -> None:
+        self.table.setRowCount(len(comparison.results))
+        for row_index, result in enumerate(comparison.results):
+            summary = (
+                summarize_distribution(result.common_distribution)
+                if result.common_distribution is not None
+                else None
+            )
+            values = (
+                result.method_id.value,
+                result.status.value,
+                result.native_estimand.value if result.native_estimand else "—",
+                summary.n if summary else 0,
+                summary.weighted_mean if summary else None,
+                summary.weighted_median if summary else None,
+                summary.p05 if summary else None,
+                summary.p95 if summary else None,
+                result.native_result,
+                result.confidence,
+                result.runtime_seconds,
+                ", ".join(result.quality_flags),
+            )
+            for column, value in enumerate(values):
+                self.table.setItem(
+                    row_index,
+                    column,
+                    QTableWidgetItem(f"{value:.5g}" if isinstance(value, float) else str(value)),
+                )
+        self.table.resizeColumnsToContents()
+        # Keep native SIMPoly/Fathom overlays without falsely implying that
+        # every registered method exposes an overlay.
+        python = next((item for item in comparison.results if item.method_id.value == "PYTHON_SIMPOLY"), None)
+        fathom = next((item for item in comparison.results if item.method_id.value == "FATHOM_LOCAL"), None)
+        x0, y0, x1, y1 = python.valid_roi if python and python.valid_roi else (0, 0, image.shape[1], image.valid_body.shape[0])
+        pixmaps = {"Original ROI + Fathom": _pixmap_from_array(image.gray[y0:y1, x0:x1])}
+        if python and python.mask is not None:
+            pixmaps["SIMPoly mask"] = _pixmap_from_array(python.mask)
+        if python and python.centerline is not None:
+            pixmaps["SIMPoly skeleton"] = _pixmap_from_array(python.centerline)
+        if fathom is not None:
+            self.preview_labels["Diameter map"].setText("Fathom Local: section-based; no diameter map")
+        for name, pixmap in pixmaps.items():
+            self.preview_labels[name].setPixmap(pixmap.scaled(500, 260, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
 
 class BatchReviewPanel(QWidget):

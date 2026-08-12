@@ -55,6 +55,7 @@ history. Frontends only submit requests and render results.
 | Qt | `ui/` | Viewer, tools, overlays, model/view panels, dialogs and background tasks. |
 | Integration | `integrations/spmkit/` | Public SPMKit channel/domain translation only. |
 | Validation adapters | `validation/` | MATLAB process discovery, cache keys, parity metrics, private campaign and review queue. |
+| Unified methods | `core/methods.py`, `core/distributions.py`, `methods.py`, `unified_comparison.py` | Capability-aware method observations, adapters, common length-weighted distributions, agreement and consensus pseudo-reference. |
 | Legacy | `app.py` | Preserved Tk application, no longer the default entrypoint. |
 
 ## Legacy behavior map
@@ -102,6 +103,33 @@ storage is deferred.
 | CSV/annotated/HTML export | yes | yes | CSV; annotated/HTML dialogs deferred |
 
 ## Known limitations
+
+## Unified Scientific Workflow V1
+
+`MethodResult` is the common contract for MATLAB SIMPoly, Python SIMPoly,
+Fathom Local, manual reference, the Field Graph registry, and future perception
+backends. It permits absent outputs rather than pretending every method has a
+mask, graph, fibers, orientation or local diameter map. `MethodCapabilities`
+states whether each output is available, partial, experimental or unavailable.
+
+The shared estimand is `COMMON_LENGTH_WEIGHTED_DIAMETER`. SIMPoly uses calibrated
+8-connected skeleton arc-length weights; Fathom Local assigns each proposed
+cross-section an equal share of its candidate centreline physical length.
+`FIBER_BALANCED_DIAMETER` is intentionally unavailable until a backend genuinely
+reconstructs fiber instances. Native SIMPoly gauss1, Fathom local, and manual
+5×5 estimands remain distinct.
+
+The MATLAB adapter only consumes a matching controlled-body cache and refuses an
+arbitrary ROI. It never launches MATLAB. The Python adapter preserves
+`KNOWN_LIBRARY_DIVERGENCE: bwskel`. Pairwise values are method differences and
+distribution distances, never errors without known truth. Dataset display gives
+each image equal weight rather than pooling all local samples.
+
+`FATHOM_FIELD_GRAPH_V1` is registered but currently
+`EXPERIMENTAL_NOT_YET_MEASURING`: it provides contracts for double-angle
+orientation fields, local-radius proposals, crossings and graph reconstruction;
+it emits none of these as scientific results yet. ML is deliberately outside this
+batch.
 
 - Qt line overlays can be translated with undo/redo; independent endpoint handles
   and editable polygon vertices remain a next-batch UI enhancement.

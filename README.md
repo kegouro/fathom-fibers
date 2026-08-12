@@ -89,6 +89,7 @@ simpoly, intermediates = engine.run_simpoly(
     roi_bbox=(100, 60, 500, 460),
 )
 comparison = engine.compare_methods(image, roi_bbox=(100, 60, 500, 460))
+unified = engine.compare_all_methods(image)
 ```
 
 Arrays are supported without filesystem access; calibration is always explicit.
@@ -107,6 +108,10 @@ fathom-fibers oracle matlab probe
 fathom-fibers campaign inventory
 fathom-fibers campaign run --methods matlab-simpoly,python-simpoly,fathom --resume
 fathom-fibers campaign report
+fathom-fibers methods list
+fathom-fibers compare --image image.tif --matlab-cache-root /path/to/.validation/real-tiff-campaign
+fathom-fibers campaign unified --dataset /path/to/16-tiffs --matlab-cache-root /path/to/.validation/real-tiff-campaign
+fathom-fibers campaign unified-report
 ```
 
 MATLAB and the private TIFF corpus are optional validation adapters. The normal
@@ -129,6 +134,20 @@ literal decisions. R2026a probes establish parity for selected operations, but
 CLAHE, Canny, complex thickening, skeletonization, automatic histogram binning
 and nonlinear fitting are not claimed as exact MATLAB parity.
 See [SIMPoly validation profile](docs/validation/simpoly-source-profile.md).
+
+## Unified method comparison
+
+`FathomEngine.compare_all_methods()` adapts MATLAB SIMPoly cache results, Python
+SIMPoly, Fathom Local, manual records and the registered Field Graph backend to
+one typed `MethodResult`. The common comparison estimand is
+`COMMON_LENGTH_WEIGHTED_DIAMETER`; native estimands remain visible separately.
+The optional `CONSENSUS_PSEUDO_REFERENCE_V1` is a median quantile curve with
+equal method weight. It is never called ground truth.
+
+`FATHOM_FIELD_GRAPH_V1` is currently an infrastructure-only experimental backend:
+it declares future orientation/radius/graph capabilities but emits no morphology
+measurements. Future Omnipose, instance embedding and ML perception backends use
+the Qt-free `FiberPerceptionBackend` contract; no model runtime is installed.
 
 The old Tk application remains at `fathom_fibers_quick.app` for migration safety;
 the default entrypoint now launches Qt. Scientific code does not import Qt or
