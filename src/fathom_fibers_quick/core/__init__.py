@@ -24,11 +24,20 @@ from .methods import (
     MethodResult,
     MethodStatus,
 )
+from .oriented_ribbon import (
+    BoundaryMidpointObservation,
+    CenterlineRefinementConfig,
+    CenterlineRefinementResult,
+    compute_midpoint_observations,
+)
 
 __all__ = [
+    "BoundaryMidpointObservation",
     "Calibration",
     "Capability",
     "CapabilityState",
+    "CenterlineRefinementConfig",
+    "CenterlineRefinementResult",
     "DiameterDistribution",
     "Estimand",
     "FathomAnalysisResult",
@@ -48,4 +57,5 @@ __all__ = [
     "Project",
     "ScientificImage",
     "ScientificMeasurement",
+    "compute_midpoint_observations",
 ]

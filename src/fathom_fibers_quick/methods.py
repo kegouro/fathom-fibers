@@ -339,6 +339,73 @@ def classical_field_adapter(
     flags = ["EXPERIMENTAL_FIELD_MEASURING", "FIELD_STAGE_IMPLEMENTED", "GRAPH_STAGE_NOT_IMPLEMENTED"]
     if not diameter_um.size:
         flags.append("NO_CENTERLINE_DIAMETER_SAMPLES")
+    local_samples = {
+        "x_m": (cols + x0) * image.calibration.pixel_size_x_m,
+        "y_m": (rows + y0) * image.calibration.pixel_size_y_m,
+        "qx": qx,
+        "qy": qy,
+        "coherence": coherence,
+        "radius_um": radius_um,
+        "diameter_um": diameter_um,
+        "arc_length_weight_m": weights_m,
+        "normal_xy": paired.normal_xy[valid],
+        "minus_xy_m": paired.minus_xy_m[valid] + edge_offset_m,
+        "plus_xy_m": paired.plus_xy_m[valid] + edge_offset_m,
+        "radius_minus_um": paired.radius_minus_m[valid] * 1e6,
+        "radius_plus_um": paired.radius_plus_m[valid] * 1e6,
+        "edge_diameter_um": edge_diameter_um,
+        "edge_asymmetry": edge_asymmetry,
+        "edge_accepted": edge_accepted,
+        "edge_tangent_alignment": paired.tangent_alignment[valid],
+        "edge_normal_consistency": paired.boundary_normal_consistency[valid],
+        "d_min_from_edges_um": d_min * 1e6,
+        "edge_minus_dmin_um": imbalance * 1e6,
+        "edt_minus_dmin_um": edt_minus_dmin * 1e6,
+        "edge_minus_edt_um": edge_minus_edt * 1e6,
+        "profile_diameter_um": profile_diameter_um,
+        "profile_accepted": profile_accepted,
+        "profile_minus_edge_um": profile_minus_edge * 1e6,
+        "profile_minus_shift_um": profile.minus_shift_m[valid] * 1e6,
+        "profile_plus_shift_um": profile.plus_shift_m[valid] * 1e6,
+        "profile_minus_u_um": profile.minus_u_m[valid] * 1e6,
+        "profile_plus_u_um": profile.plus_u_m[valid] * 1e6,
+        "profile_gradient_snr": profile.gradient_snr[valid],
+        "suggested_center_shift_um": profile.suggested_center_shift_m[valid] * 1e6,
+        "edge_flags": edge_flags,
+        "profile_flags": profile_flags,
+    }
+    if local_samples:
+        from .core.oriented_ribbon import compute_midpoint_observations
+
+        ribbon = compute_midpoint_observations(
+            local_samples, include_observations=False
+        )
+        local_samples.update(
+            {
+                "refine_accepted": ribbon.accepted_mask,
+                "refine_confidence": ribbon.confidence,
+                "midpoint_mask_x_m": ribbon.mask_midpoint_xy_m[:, 0],
+                "midpoint_mask_y_m": ribbon.mask_midpoint_xy_m[:, 1],
+                "midpoint_profile_x_m": ribbon.profile_midpoint_xy_m[:, 0],
+                "midpoint_profile_y_m": ribbon.profile_midpoint_xy_m[:, 1],
+                "midpoint_preferred_x_m": ribbon.preferred_midpoint_xy_m[:, 0],
+                "midpoint_preferred_y_m": ribbon.preferred_midpoint_xy_m[:, 1],
+                "center_shift_um": ribbon.shift_um,
+                "center_shift_signed_um": ribbon.signed_normal_shift_um,
+                "center_shift_tangent_um": ribbon.tangential_shift_um,
+                "midpoint_source": ribbon.midpoint_source,
+            }
+        )
+        ribbon_flags = tuple(flag for flag in ribbon.flags if flag != "MIDPOINT_OBSERVATIONS_ONLY")
+        flags.extend(ribbon_flags)
+        native_statistics_payload = {
+            "refine_accepted_count": ribbon.summary["accepted_count"],
+            "refine_coverage_fraction": ribbon.coverage_fraction,
+            "refine_median_shift_um": ribbon.summary["median_shift_um"],
+            "refine_p90_shift_um": ribbon.summary["p90_shift_um"],
+        }
+    else:
+        native_statistics_payload = {}
     return MethodResult(
         MethodId.FATHOM_FIELD_GRAPH_V1, "CLASSICAL_FIBER_FIELD_V1", image.image_id, _calibration(image), roi, "um",
         MethodCapabilities({
@@ -388,6 +455,7 @@ def classical_field_adapter(
                 np.maximum(np.abs(profile.minus_shift_m[valid]), np.abs(profile.plus_shift_m[valid])), profile_minus_edge
             ),
             "boundary_contour_count": len(contours),
+            **native_statistics_payload,
         },
         native,
         common,
@@ -401,41 +469,7 @@ def classical_field_adapter(
         centerline=centerline,
         orientation_field=(np.asarray(output.orientation_qx), np.asarray(output.orientation_qy)),
         radius_map=np.asarray(output.radius_m),
-        local_samples={
-            "x_m": (cols + x0) * image.calibration.pixel_size_x_m,
-            "y_m": (rows + y0) * image.calibration.pixel_size_y_m,
-            "qx": qx,
-            "qy": qy,
-            "coherence": coherence,
-            "radius_um": radius_um,
-            "diameter_um": diameter_um,
-            "arc_length_weight_m": weights_m,
-            "normal_xy": paired.normal_xy[valid],
-            "minus_xy_m": paired.minus_xy_m[valid] + edge_offset_m,
-            "plus_xy_m": paired.plus_xy_m[valid] + edge_offset_m,
-            "radius_minus_um": paired.radius_minus_m[valid] * 1e6,
-            "radius_plus_um": paired.radius_plus_m[valid] * 1e6,
-            "edge_diameter_um": edge_diameter_um,
-            "edge_asymmetry": edge_asymmetry,
-            "edge_accepted": edge_accepted,
-            "edge_tangent_alignment": paired.tangent_alignment[valid],
-            "edge_normal_consistency": paired.boundary_normal_consistency[valid],
-            "d_min_from_edges_um": d_min * 1e6,
-            "edge_minus_dmin_um": imbalance * 1e6,
-            "edt_minus_dmin_um": edt_minus_dmin * 1e6,
-            "edge_minus_edt_um": edge_minus_edt * 1e6,
-            "profile_diameter_um": profile_diameter_um,
-            "profile_accepted": profile_accepted,
-            "profile_minus_edge_um": profile_minus_edge * 1e6,
-            "profile_minus_shift_um": profile.minus_shift_m[valid] * 1e6,
-            "profile_plus_shift_um": profile.plus_shift_m[valid] * 1e6,
-            "profile_minus_u_um": profile.minus_u_m[valid] * 1e6,
-            "profile_plus_u_um": profile.plus_u_m[valid] * 1e6,
-            "profile_gradient_snr": profile.gradient_snr[valid],
-            "suggested_center_shift_um": profile.suggested_center_shift_m[valid] * 1e6,
-            "edge_flags": edge_flags,
-            "profile_flags": profile_flags,
-        },
+        local_samples=local_samples,
         quality_flags=tuple(flags), confidence=mean_coherence,
         runtime_seconds=time.monotonic() - started,
         provenance={
