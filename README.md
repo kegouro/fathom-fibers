@@ -69,6 +69,41 @@ Tools and shortcuts:
 See [measurement workflow](docs/measurement-workflow.md) for review rules and
 estimand cautions.
 
+## Scientific workspace
+
+From one window the workspace opens a dataset, navigates all 16 images, loads or
+runs the unified methods, compares distributions, reviews individual field
+measurements and completes the manual 5×5 protocol.
+
+1. **Launch** — `fathom-fibers` (or `./launch.py`).
+2. **Open dataset** — toolbar or *File → Open dataset*; the canonical corpus is
+   `local_data/zeiss/30-07-26`. The DATASET dock lists the 16 images with
+   `complete / summary cache / not analyzed` status and per-image manual progress.
+3. **Run methods** — `R` opens the run dialog: Python SIMPoly, Fathom Local and
+   Fathom Field run in background workers; MATLAB is consumed from the validated
+   cache (never launched). Full results are cached per image under
+   `.validation/unified-method-comparison/full/`, so revisiting an image never
+   reruns algorithms. `Run missing` / `Run all dataset` fill the cache ahead of
+   time (`scripts/cache_workspace_results.py` does the same headless).
+4. **View distributions** — the DISTRIBUTIONS tab shows a weighted density
+   histogram and ECDF with identical bins and units across series, plus pairwise
+   Wasserstein-1 / KS / median-difference tables. Field EDT, Paired Edge and
+   Intensity Profile are estimator variants of one experimental method.
+5. **Manual 5×5** — the MANUAL 5×5 tab guides 25 targets per image: next target,
+   draw a perpendicular width line (`M`), measurement is accepted and autosaved
+   immediately. `Enter` next, `Backspace` previous, `Delete` remove, `Esc`
+   cancel. Progress is persisted per dataset (`.validation/…/manual5x5/`) so a
+   crash never loses the 400-measurement campaign.
+6. **Generate report** — *Report → Generate scientific report* (image,
+   `Ctrl+R`) or *Generate dataset scientific report*; both are headless HTML
+   reports with figures, written under `.validation/unified-method-comparison/`.
+7. **Export** — current-image CSV/JSON or dataset summary CSV.
+
+The UI contains no scientific algorithms: Qt widgets talk to the
+`WorkspaceController`, which orchestrates the Qt-free `workspace` layer,
+`FathomEngine`, `ProjectSession` and `MethodResult` contracts. The scientific
+core remains fully usable headless and never imports PySide6.
+
 ## Headless API
 
 ```python
@@ -144,10 +179,13 @@ one typed `MethodResult`. The common comparison estimand is
 The optional `CONSENSUS_PSEUDO_REFERENCE_V1` is a median quantile curve with
 equal method weight. It is never called ground truth.
 
-`FATHOM_FIELD_GRAPH_V1` is currently an infrastructure-only experimental backend:
-it declares future orientation/radius/graph capabilities but emits no morphology
-measurements. Future Omnipose, instance embedding and ML perception backends use
-the Qt-free `FiberPerceptionBackend` contract; no model runtime is installed.
+`FATHOM_FIELD_GRAPH_V1` is an experimental field-measuring backend: orientation
+field, anisotropic EDT radii and paired-edge metrology with intensity-profile
+refinement are implemented and reported with `EXPERIMENTAL_FIELD_MEASURING`
+status. Graph reconstruction, crossing resolution and fiber instances are not
+implemented and are not hidden. Future Omnipose, instance embedding and ML
+perception backends use the Qt-free `FiberPerceptionBackend` contract; no model
+runtime is installed.
 
 The old Tk application remains at `fathom_fibers_quick.app` for migration safety;
 the default entrypoint now launches Qt. Scientific code does not import Qt or

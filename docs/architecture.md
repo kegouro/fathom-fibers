@@ -52,7 +52,8 @@ history. Frontends only submit requests and render results.
 | Algorithms | `analysis.py`, `auto_roi.py`, `measurement_geometry.py`, `simpoly_compat.py`, `oracles/` | Numerical and scientific behavior. |
 | I/O | `zeiss.py`, `project_io.py`, `exporters.py`, `autosave.py` | File formats, atomic persistence and export. |
 | Application | `application/session.py`, `api.py`, `history.py` | Use cases, commands, dirty state, review transitions and headless façade. |
-| Qt | `ui/` | Viewer, tools, overlays, model/view panels, dialogs and background tasks. |
+| Workspace application | `workspace.py`, `reports.py` | Qt-free dataset state, full-result disk cache, manual 5×5 store, staged method orchestration and headless HTML reports. |
+| Qt | `ui/` | Viewer, tools, overlays, workspace controller, model/view panels, dialogs and background tasks. |
 | Integration | `integrations/spmkit/` | Public SPMKit channel/domain translation only. |
 | Validation adapters | `validation/` | MATLAB process discovery, cache keys, parity metrics, private campaign and review queue. |
 | Unified methods | `core/methods.py`, `core/distributions.py`, `methods.py`, `unified_comparison.py` | Capability-aware method observations, adapters, common length-weighted distributions, agreement and consensus pseudo-reference. |
@@ -125,11 +126,16 @@ arbitrary ROI. It never launches MATLAB. The Python adapter preserves
 distribution distances, never errors without known truth. Dataset display gives
 each image equal weight rather than pooling all local samples.
 
-`FATHOM_FIELD_GRAPH_V1` is registered but currently
-`EXPERIMENTAL_NOT_YET_MEASURING`: it provides contracts for double-angle
-orientation fields, local-radius proposals, crossings and graph reconstruction;
-it emits none of these as scientific results yet. ML is deliberately outside this
-batch.
+`FATHOM_FIELD_GRAPH_V1` registers as `EXPERIMENTAL_FIELD_MEASURING`: orientation
+fields, anisotropic EDT radii and paired-edge metrology with intensity-profile
+refinement are measured; graph reconstruction, crossing resolution and fiber
+instances remain unavailable. ML is deliberately outside this batch.
+
+The Qt-free `workspace` layer owns dataset state, the full-result disk cache
+(`.validation/unified-method-comparison/full/`), the manual 5×5 store and the
+staged method orchestration used by both the desktop controller and the headless
+precompute script. `reports.py` renders image and dataset HTML reports headless;
+neither module imports Qt.
 
 - Qt line overlays can be translated with undo/redo; independent endpoint handles
   and editable polygon vertices remain a next-batch UI enhancement.
