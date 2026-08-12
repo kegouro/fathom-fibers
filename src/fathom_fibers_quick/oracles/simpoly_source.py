@@ -51,6 +51,7 @@ SIMPOLY_STAGE_PARITY: dict[str, ParityClassification] = {
     "bwareaopen_20": ParityClassification.BITWISE_PARITY,
     "bwmorph_thicken_1": ParityClassification.BITWISE_PARITY,
     "graythresh_plus_0_1_on_ihist": ParityClassification.BITWISE_PARITY,
+    "imbinarize_strict_threshold_on_ihist": ParityClassification.BITWISE_PARITY,
     "closing_disk_1": ParityClassification.BITWISE_PARITY,
     "bwmorph_clean_fill_majority": ParityClassification.BITWISE_PARITY,
     "bwmorph_thin_4": ParityClassification.BITWISE_PARITY,
