@@ -221,6 +221,12 @@ def main() -> None:
             for method in MethodId
         ], indent=2))
         return
+    if args.command == "validation" and args.validation_action == "oriented-ribbon":
+        from .validation.oriented_ribbon_validation import build_oriented_ribbon_report
+
+        index = build_oriented_ribbon_report(args.repo, dataset_dir=args.dataset)
+        print(index)
+        return 0
     if args.command in {"analyze", "compare"}:
         from .api import FathomEngine
 
