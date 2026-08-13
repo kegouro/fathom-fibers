@@ -174,7 +174,13 @@ class WorkspaceCache:
     Arrays are stored in a per-image NPZ; scalars and provenance in a sibling
     JSON.  Older summary-only campaign runs are still readable and are
     reported as summary-level evidence, never as full samples.
+
+    ``FULL_SCHEMA`` versions the per-image full cache: v2 added the oriented
+    ribbon refined-centerline remeasurement arrays, so v1 caches are treated
+    as missing and recomputed.
     """
+
+    FULL_SCHEMA = "fathom-workspace-full-v2"
 
     def __init__(self, repo: str | Path | None = None) -> None:
         root = Path(repo or Path.cwd()).resolve() / VALIDATION_ROOT
@@ -193,7 +199,14 @@ class WorkspaceCache:
         return self.full_dir / f"{stem}.npz"
 
     def has_full(self, stem: str) -> bool:
-        return self.full_json_path(stem).exists() and self.full_npz_path(stem).exists()
+        json_path = self.full_json_path(stem)
+        if not json_path.exists() or not self.full_npz_path(stem).exists():
+            return False
+        try:
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return payload.get("schema") == self.FULL_SCHEMA
 
     def summary_payload(self, stem: str) -> dict[str, Any] | None:
         path = self.runs_dir / f"{stem}.json"
@@ -210,7 +223,7 @@ class WorkspaceCache:
             arrays.update(entry_arrays)
             results.append(entry)
         payload = {
-            "schema": "fathom-workspace-full-v1",
+            "schema": self.FULL_SCHEMA,
             "image_id": comparison.image_id,
             "created_utc": datetime.now(UTC).isoformat(),
             "results": results,
@@ -224,7 +237,7 @@ class WorkspaceCache:
         if arrays:
             npz_temporary = npz_path.with_suffix(".npz.tmp")
             with npz_temporary.open("wb") as handle:
-                np.savez(handle, **arrays)
+                np.savez_compressed(handle, **arrays)
             npz_temporary.replace(npz_path)
         return json_path
 

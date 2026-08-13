@@ -283,7 +283,8 @@ def classical_field_adapter(
         pixel_size_xy_m=(image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m),
         contours=contours,
     )
-    profile = IntensityProfileSampler().refine(
+    profile_sampler = IntensityProfileSampler()
+    profile = profile_sampler.refine(
         body, paired, pixel_size_xy_m=(image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m)
     )
     centerline = np.asarray(output.centerline, dtype=bool)
@@ -408,6 +409,7 @@ def classical_field_adapter(
             pixel_size_xy_m=(image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m),
         )
         refined_xy = smooth.refined_xy_m
+        remeasurement = None
         if refined_xy is not None:
             local_samples.update(
                 {
@@ -421,6 +423,64 @@ def classical_field_adapter(
             )
             smooth_flags = tuple(flag for flag in smooth.flags if flag not in {"SMOOTH_CENTERLINE_V1"})
             flags.extend(smooth_flags)
+            from .core.refined_remeasurement import remeasure_refined_centerline
+
+            remeasurement = remeasure_refined_centerline(
+                smooth,
+                mask=binary,
+                body=body,
+                edt_radius_m=np.asarray(output.radius_m, float),
+                pixel_size_xy_m=(image.calibration.pixel_size_x_m, image.calibration.pixel_size_y_m),
+                roi_origin_px=(x0, y0),
+                raw_coherence=coherence,
+                raw_normal_xy=paired.normal_xy[valid],
+                raw_qx=qx,
+                raw_qy=qy,
+                boundary_engine=boundary_engine,
+                profile_sampler=profile_sampler,
+                contours=contours,
+            )
+            refined_keys = {
+                "refined_x_m": refined_xy[:, 0],
+                "refined_y_m": refined_xy[:, 1],
+                "refined_tangent_xy": remeasurement.refined_tangent_xy,
+                "refined_normal_xy": remeasurement.refined_normal_xy,
+                "refined_edt_um": remeasurement.refined_edt_um,
+                "refined_r_minus_um": remeasurement.refined_r_minus_um,
+                "refined_r_plus_um": remeasurement.refined_r_plus_um,
+                "refined_edge_um": remeasurement.refined_edge_um,
+                "refined_edge_accepted": remeasurement.refined_edge_accepted,
+                "refined_edge_flags": remeasurement.refined_edge_flags,
+                "refined_profile_um": remeasurement.refined_profile_um,
+                "refined_profile_accepted": remeasurement.refined_profile_accepted,
+                "refined_profile_flags": remeasurement.refined_profile_flags,
+                "refined_asymmetry": remeasurement.refined_asymmetry,
+                "residual_center_shift_um": remeasurement.residual_center_shift_um,
+                "residual_normal_shift_um": remeasurement.residual_normal_shift_um,
+                "residual_tangential_shift_um": remeasurement.residual_tangential_shift_um,
+                "refined_arc_weight_m": remeasurement.refined_arc_weight_m,
+                "refined_axis_disagreement_deg": remeasurement.axis_disagreement_deg,
+                "refined_profile_center_shift_um": remeasurement.profile_center_shift_um,
+            }
+            local_samples.update(refined_keys)
+            remeasurement_flags = tuple(
+                flag for flag in remeasurement.flags if flag != "REFINED_REMEASUREMENT"
+            )
+            flags.extend(remeasurement_flags)
+            refined_summary_payload = {
+                "refined_edge_accepted_count": remeasurement.summary["refined_edge_accepted_count"],
+                "refined_edge_acceptance_fraction": remeasurement.summary["refined_edge_acceptance_fraction"],
+                "refined_profile_accepted_count": remeasurement.summary["refined_profile_accepted_count"],
+                "refined_profile_acceptance_fraction": remeasurement.summary["refined_profile_acceptance_fraction"],
+                "refined_edt_median_um": remeasurement.summary["refined_edt_median_um"],
+                "refined_edge_median_um": remeasurement.summary["refined_edge_median_um"],
+                "refined_profile_median_um": remeasurement.summary["refined_profile_median_um"],
+                "refined_asymmetry_median": remeasurement.summary["refined_asymmetry_median"],
+                "refined_residual_shift_median_um": remeasurement.summary["refined_residual_shift_median_um"],
+                "refined_residual_shift_p90_um": remeasurement.summary["refined_residual_shift_p90_um"],
+            }
+        else:
+            refined_summary_payload = {}
         native_statistics_payload = {
             "refine_accepted_count": ribbon.summary["accepted_count"],
             "refine_coverage_fraction": ribbon.coverage_fraction,
@@ -430,9 +490,11 @@ def classical_field_adapter(
             "smooth_segment_count": smooth.summary["segment_count"],
             "smooth_median_shift_um": smooth.summary["median_smooth_shift_um"],
             "smooth_p90_shift_um": smooth.summary["p90_smooth_shift_um"],
+            **refined_summary_payload,
         }
     else:
         native_statistics_payload = {}
+        remeasurement = None
     return MethodResult(
         MethodId.FATHOM_FIELD_GRAPH_V1, "CLASSICAL_FIBER_FIELD_V1", image.image_id, _calibration(image), roi, "um",
         MethodCapabilities({
@@ -441,6 +503,10 @@ def classical_field_adapter(
             Capability.ORIENTATION_FIELD: CapabilityState.AVAILABLE,
             Capability.ORIENTED_BOUNDARIES: CapabilityState.AVAILABLE,
             Capability.PAIRED_EDGE_LOCAL_WIDTH: CapabilityState.EXPERIMENTAL,
+            Capability.INTENSITY_PROFILE_LOCAL_WIDTH: CapabilityState.EXPERIMENTAL,
+            Capability.REFINED_CENTERLINE_REMEASUREMENT: (
+                CapabilityState.EXPERIMENTAL if remeasurement is not None else CapabilityState.UNAVAILABLE
+            ),
             Capability.LOCAL_RADIUS: CapabilityState.AVAILABLE,
             Capability.LOCAL_DIAMETER: CapabilityState.AVAILABLE,
             Capability.GLOBAL_DIAMETER_DISTRIBUTION: CapabilityState.AVAILABLE,
@@ -490,6 +556,11 @@ def classical_field_adapter(
             name: distribution for name, distribution in {
                 "FATHOM_FIELD_PAIRED_EDGE_DIAMETER": edge_distribution,
                 "FATHOM_FIELD_PROFILE_DIAMETER": profile_distribution,
+                **(
+                    remeasurement.distributions
+                    if remeasurement is not None
+                    else {}
+                ),
             }.items() if distribution is not None
         },
         mask=binary,

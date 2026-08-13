@@ -269,17 +269,51 @@ class OrientedBoundaryEngine:
         pixel_size_xy_m: tuple[float, float],
         contours: tuple[BoundaryContour, ...] = (),
     ) -> PairedEdgeSamples:
-        binary = np.asarray(mask, dtype=bool)
         line = np.asarray(centerline, dtype=bool)
         px, py = pixel_size_xy_m
         rows, cols = np.nonzero(line)
-        count = len(rows)
         center = np.column_stack((cols * px, rows * py)).astype(float)
-        qx, qy = orientation_qx[line], orientation_qy[line]
+        qx, qy = np.asarray(orientation_qx, float)[line], np.asarray(orientation_qy, float)[line]
         theta = 0.5 * np.arctan2(qy, qx)
         normal = np.column_stack((-np.sin(theta), np.cos(theta)))
         edt = np.asarray(edt_diameter_m, float)[line]
         coh = np.asarray(coherence, float)[line]
+        return self.pair_centers(
+            center,
+            normal,
+            edt,
+            coh,
+            mask=mask,
+            pixel_size_xy_m=pixel_size_xy_m,
+            contours=contours,
+        )
+
+    def pair_centers(
+        self,
+        centers_xy_m: np.ndarray,
+        normals_xy: np.ndarray,
+        edt_diameter_m: np.ndarray,
+        coherence: np.ndarray,
+        *,
+        mask: np.ndarray,
+        pixel_size_xy_m: tuple[float, float],
+        contours: tuple[BoundaryContour, ...] = (),
+    ) -> PairedEdgeSamples:
+        """Ray-based paired-boundary search at arbitrary (subpixel) centers.
+
+        Uses exactly the same ray grid, interpolation, acceptance and
+        ambiguity rules as :meth:`pair_centerline`; the only difference is
+        that centers and normals are supplied directly (e.g. from a refined
+        centerline) instead of derived from skeleton pixels and the double
+        angle orientation field.
+        """
+        binary = np.asarray(mask, dtype=bool)
+        px, py = pixel_size_xy_m
+        center = np.asarray(centers_xy_m, dtype=float)
+        normal = np.asarray(normals_xy, dtype=float)
+        count = center.shape[0]
+        edt = np.asarray(edt_diameter_m, float)
+        coh = np.asarray(coherence, float)
         minus = np.full((count, 2), np.nan)
         plus = np.full((count, 2), np.nan)
         r_minus = np.full(count, np.nan)
@@ -321,7 +355,7 @@ class OrientedBoundaryEngine:
             boundary_tangent = np.concatenate([item.tangent_xy for item in contours])
             boundary_inward = np.concatenate([item.inward_normal_xy for item in contours])
             tree = cKDTree(boundary_xy)
-            center_tangent = np.column_stack((np.cos(theta), np.sin(theta)))
+            center_tangent = np.column_stack((normal[:, 1], -normal[:, 0]))
             for hit, radius in ((minus, r_minus), (plus, r_plus)):
                 valid_hit = np.isfinite(radius)
                 _, nearest = tree.query(hit[valid_hit])

@@ -21,10 +21,6 @@ import numpy as np
 from scipy.interpolate import make_smoothing_spline
 
 from .oriented_ribbon import (
-    ABSTAIN_EDGE_FLAGS,
-    ABSTAIN_PROFILE_FLAGS,
-    LOW_COHERENCE_FLAG,
-    BoundaryMidpointObservation,
     CenterlineRefinementConfig,
     CenterlineRefinementResult,
 )
@@ -239,24 +235,13 @@ def _pixel_to_sample_index(
     return mapping
 
 
-def _refinable(
-    observation: BoundaryMidpointObservation,
-    config: CenterlineRefinementConfig,
-) -> bool:
-    if not observation.accepted:
+def _refinable_index(index: int, refinement: CenterlineRefinementResult) -> bool:
+    """Stage-1 acceptance already implements all hard-flag abstention."""
+    if not refinement.accepted_mask[index]:
         return False
-    if observation.preferred_midpoint_xy_m is None:
+    if not np.isfinite(refinement.preferred_midpoint_xy_m[index]).all():
         return False
-    if not all(math.isfinite(value) for value in observation.preferred_midpoint_xy_m):
-        return False
-    if not math.isfinite(observation.refinement_confidence):
-        return False
-    hard = (
-        ABSTAIN_EDGE_FLAGS
-        | ABSTAIN_PROFILE_FLAGS
-        | {LOW_COHERENCE_FLAG}
-    )
-    return not any(flag in hard for flag in observation.flags)
+    return math.isfinite(float(refinement.confidence[index]))
 
 
 def refine_centerline(
@@ -284,7 +269,6 @@ def refine_centerline(
     n = int(refinement.original_xy_m.shape[0])
     runs = order_seed_runs(seed_mask, pixel_size_xy_m=pixel_size_xy_m)
     sample_index = _pixel_to_sample_index(samples)
-    observations = {item.source_index: item for item in refinement.observations}
     normal = np.asarray(samples["normal_xy"], dtype=float)
     tangent = np.column_stack((normal[:, 1], -normal[:, 0]))
 
@@ -305,7 +289,7 @@ def refine_centerline(
         median_step = _median_run_step(run)
         max_gap = config.max_gap_factor * median_step
         for fragment in _split_refinable_fragments(
-            run, run_samples, observations, samples, config, max_gap=max_gap
+            run, run_samples, refinement, config, max_gap=max_gap
         ):
             indices = fragment["indices"]
             if indices.size < config.min_segment_points:
@@ -421,8 +405,7 @@ def _median_run_step(run: SeedRun) -> float:
 def _split_refinable_fragments(
     run: SeedRun,
     run_samples: list[tuple[int, int, int]],
-    observations: dict[int, BoundaryMidpointObservation],
-    samples: Mapping[str, np.ndarray],
+    refinement: CenterlineRefinementResult,
     config: CenterlineRefinementConfig,
     *,
     max_gap: float,
@@ -432,8 +415,7 @@ def _split_refinable_fragments(
     current_s: list[float] = []
     previous_s: float | None = None
     for pixel_index, sample_index in run_samples:
-        observation = observations.get(sample_index)
-        refinable = observation is not None and _refinable(observation, config)
+        refinable = _refinable_index(sample_index, refinement)
         s_value = float(run.s_m[pixel_index])
         gap_ok = (
             previous_s is None
@@ -441,7 +423,7 @@ def _split_refinable_fragments(
         )
         if (not refinable or not gap_ok) and current:
             fragments.append(
-                _fragment_from_current(run, current, current_s, observations, samples)
+                _fragment_from_current(run, current, current_s, refinement)
             )
             current = []
             current_s = []
@@ -451,7 +433,7 @@ def _split_refinable_fragments(
         previous_s = s_value
     if current:
         fragments.append(
-            _fragment_from_current(run, current, current_s, observations, samples)
+            _fragment_from_current(run, current, current_s, refinement)
         )
     return fragments
 
@@ -460,46 +442,17 @@ def _fragment_from_current(
     run: SeedRun,
     indices: list[int],
     s_values: list[float],
-    observations: dict[int, BoundaryMidpointObservation],
-    samples: Mapping[str, np.ndarray],
+    refinement: CenterlineRefinementResult,
 ) -> dict[str, Any]:
     index_array = np.asarray(indices, dtype=int)
-    s_array = np.asarray(s_values, dtype=float)
-    midpoints = refinement_preferred_midpoints(index_array, observations)
-    seed_xy = np.asarray(
-        [np.asarray(observations[index].original_xy_m) for index in indices],
-        dtype=float,
-    )
-    confidence = np.asarray(
-        [observations[index].refinement_confidence for index in indices], dtype=float
-    )
-    source = np.asarray(
-        [
-            observations[index].preferred_midpoint_source or ""
-            for index in indices
-        ],
-        dtype="<U8",
-    )
     return {
         "indices": index_array,
-        "s_m": s_array,
-        "midpoints": midpoints,
-        "seed_xy": seed_xy,
-        "confidence": confidence,
-        "source": source,
+        "s_m": np.asarray(s_values, dtype=float),
+        "midpoints": refinement.preferred_midpoint_xy_m[index_array],
+        "seed_xy": refinement.original_xy_m[index_array],
+        "confidence": refinement.confidence[index_array],
+        "source": refinement.midpoint_source[index_array],
     }
-
-
-def refinement_preferred_midpoints(
-    indices: np.ndarray,
-    observations: dict[int, BoundaryMidpointObservation],
-) -> np.ndarray:
-    midpoints = np.full((indices.size, 2), np.nan)
-    for position, index in enumerate(indices):
-        midpoint = observations[index].preferred_midpoint_xy_m
-        if midpoint is not None:
-            midpoints[position] = midpoint
-    return midpoints
 
 
 def _fit_fragment(
