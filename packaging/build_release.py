@@ -184,7 +184,7 @@ def sha256(path: Path) -> str:
 
 
 def archive_tree(source: Path, destination: Path, *, platform_tag: str) -> Path:
-    if platform_tag == "windows":
+    if platform_tag.startswith("windows"):
         with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as handle:
             for path in sorted(source.rglob("*")):
                 if path.is_file():

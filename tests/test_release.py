@@ -41,8 +41,11 @@ def test_version_consistent():
 def test_version_cli_output():
     result = subprocess.run(
         [sys.executable, "-m", "fathom_fibers_quick", "--version"],
-        capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(REPO / "src")},
-        timeout=120, check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(REPO / "src")},
+        timeout=120,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert "Fathom Fibers 0.2.0rc1" in result.stdout
@@ -54,7 +57,9 @@ def test_release_filename_scheme():
     import fathom_fibers_quick.release_scheme as scheme
 
     assert scheme.archive_name("linux", "x86_64").startswith("FathomFibers-0.2.0-rc1-linux-x86_64")
-    assert scheme.archive_name("windows", "x86_64").startswith("FathomFibers-0.2.0-rc1-windows-x86_64")
+    assert scheme.archive_name("windows", "x86_64").startswith(
+        "FathomFibers-0.2.0-rc1-windows-x86_64"
+    )
     assert scheme.archive_name("macos", "arm64").startswith("FathomFibers-0.2.0-rc1-macos-arm64")
 
 
@@ -79,6 +84,34 @@ def test_readme_first_exists_and_mentions_core_flow():
         assert marker not in text
 
 
+def test_archive_tree_windows_produces_real_zip(tmp_path):
+    import importlib.util
+    from pathlib import Path as _Path
+
+    spec = importlib.util.spec_from_file_location(
+        "build_release", _Path(__file__).resolve().parents[1] / "packaging/build_release.py"
+    )
+    build_release = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(build_release)
+    archive_tree = build_release.archive_tree
+
+    staging = tmp_path / "staging"
+    (staging / "FathomFibers").mkdir(parents=True)
+    (staging / "FathomFibers" / "FathomFibers.exe").write_bytes(b"\x4d\x5a fake")
+    (staging / "README_FIRST.md").write_text("hello\n")
+    (staging / "VERSION").write_text("0.2.0-rc1\ncommit deadbeef\n")
+    destination = tmp_path / "FathomFibers-0.2.0-rc1-windows-amd64.zip"
+    archive_tree(staging, destination, platform_tag="windows-amd64")
+    assert destination.read_bytes()[:4] == b"PK\x03\x04"
+    import zipfile
+
+    with zipfile.ZipFile(destination) as handle:
+        assert handle.testzip() is None
+        names = handle.namelist()
+    assert any("README_FIRST.md" in name for name in names)
+
+
 def test_verify_release_rejects_private_content(tmp_path):
     import sys as _sys
 
@@ -92,7 +125,10 @@ def test_verify_release_rejects_private_content(tmp_path):
     script = REPO / "packaging/verify_release.py"
     result = subprocess.run(
         [_sys.executable, str(script), str(staged)],
-        capture_output=True, text=True, timeout=120, check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     )
     assert result.returncode != 0
     assert "private" in result.stdout.lower()
@@ -111,7 +147,10 @@ def test_verify_release_accepts_clean_staging(tmp_path):
     script = REPO / "packaging/verify_release.py"
     result = subprocess.run(
         [_sys.executable, str(script), str(staged)],
-        capture_output=True, text=True, timeout=120, check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "release verification PASSED" in result.stdout
@@ -126,7 +165,9 @@ def test_obsolete_report_figures_removed_on_regeneration(tmp_path):
     engine = FathomEngine()
     pixels = np.zeros((96, 128), dtype=np.uint8)
     pixels[35:55, 16:112] = 220
-    image = engine.from_array(pixels, calibration=Calibration(5e-9, 5e-9, "test"), image_id="synthetic")
+    image = engine.from_array(
+        pixels, calibration=Calibration(5e-9, 5e-9, "test"), image_id="synthetic"
+    )
     cache = WorkspaceCache(tmp_path)
     comparison = engine.compare_all_methods(image)
     cache.store_comparison("synthetic", comparison)
@@ -154,7 +195,9 @@ def test_report_provenance_uses_build_commit(tmp_path):
     engine = FathomEngine()
     pixels = np.zeros((96, 128), dtype=np.uint8)
     pixels[35:55, 16:112] = 220
-    image = engine.from_array(pixels, calibration=Calibration(5e-9, 5e-9, "test"), image_id="synthetic")
+    image = engine.from_array(
+        pixels, calibration=Calibration(5e-9, 5e-9, "test"), image_id="synthetic"
+    )
     cache = WorkspaceCache(tmp_path)
     cache.store_comparison("synthetic", engine.compare_all_methods(image))
     loaded = cache.load_comparison("synthetic")
