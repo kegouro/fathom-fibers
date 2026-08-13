@@ -21,6 +21,7 @@ from .core.distributions import (
     summarize_distribution,
 )
 from .core.methods import DiameterDistribution, MethodId, MethodResult, MethodStatus
+from .report_style import short_name
 from .unified_comparison import UnifiedMethodComparison
 from .validation.unified_methods import _load_cached_payloads, _root
 from .workspace import WorkspaceCache
@@ -129,7 +130,77 @@ def _save(figure, path: Path) -> None:
     del figure
 
 
-def figure_common_histogram(series: list[tuple[str, DiameterDistribution]], output_dir: Path) -> Path:
+def _series_style(name: str) -> tuple[str, str, str]:
+
+    """Color-blind-safe color, line style and short label per series family."""
+    styles = {
+        "Python SIMPoly": ("#e69f00", "solid"),
+        "Fathom Local": ("#009e73", "dashed"),
+        "Fathom Field (EDT)": ("#9aa7c9", "dashed"),
+        "Field Paired Edge": ("#9cc4c4", "dashed"),
+        "Field Intensity Profile": ("#c2a8cc", "dashed"),
+        "Ribbon Refined EDT": ("#4d648d", "solid"),
+        "Ribbon Refined Edge": ("#3b7f7f", "solid"),
+        "Ribbon Refined Profile": ("#76538a", "solid"),
+        "Manual 5×5": ("#c44e52", "dashdot"),
+        "Consensus": ("#555555", "solid"),
+    }
+    color, style = styles.get(name, ("#777777", "solid"))
+    return color, style, short_name(name)
+
+
+def _primary_x_max(series: list[tuple[str, DiameterDistribution]]) -> float | None:
+    """Data-driven right edge of the primary comparison range.
+
+    Uses the weighted P99 of the primary/common estimators only (Python
+    SIMPoly, Field raw and Ribbon family, Consensus, Manual when present).
+    Fathom Local, a deliberately alternative estimator, is excluded from
+    scale selection only; its full distribution stays visible in the
+    full-range views.
+    """
+    from .core.distributions import weighted_quantile
+
+    excluded = {"Fathom Local"}
+    p99s: list[float] = []
+    for name, distribution in series:
+        if name in excluded or distribution.diameter.size == 0:
+            continue
+        value = float(weighted_quantile(distribution.diameter, distribution.weight, np.array([0.99]))[0])
+        if np.isfinite(value) and value > 0:
+            p99s.append(value)
+    if not p99s:
+        return None
+    return float(np.max(p99s)) * 1.12
+
+
+def _long_tail_ratio(series: list[tuple[str, DiameterDistribution]], name: str) -> float | None:
+    distribution = next((item[1] for item in series if item[0] == name), None)
+    if distribution is None or distribution.diameter.size == 0:
+        return None
+    from .core.distributions import summarize_distribution, weighted_quantile
+
+    summary = summarize_distribution(distribution)
+    if summary.weighted_median is None or summary.weighted_median <= 0:
+        return None
+    return float(weighted_quantile(distribution.diameter, distribution.weight, np.array([0.95]))[0]) / summary.weighted_median
+
+
+def _common_series(series: list[tuple[str, DiameterDistribution]]) -> list[tuple[str, DiameterDistribution]]:
+    return [(name, dist) for name, dist in series if name != "Fathom Local"]
+
+
+def _legend(axis, series: list[tuple[str, DiameterDistribution]]) -> None:
+    handles = []
+    labels = []
+    for name, distribution in series:
+        color, style, short = _series_style(name)
+        handle = axis.plot([], [], color=color, linestyle=style, linewidth=2)
+        handles.append(handle[0])
+        labels.append(short)
+    axis.legend(handles, labels, fontsize="small", ncol=2, loc="upper right", framealpha=0.9)
+
+
+def figure_primary_histogram(series: list[tuple[str, DiameterDistribution]], output_dir: Path, x_max: float | None) -> Path:
     figure = _new_figure()
     axis = figure.add_subplot(111)
     distributions = [item[1] for item in series]
@@ -139,121 +210,213 @@ def figure_common_histogram(series: list[tuple[str, DiameterDistribution]], outp
     else:
         centers = edges[:-1] + np.diff(edges) / 2.0
         for name, distribution in series:
+            color, style, label = _series_style(name)
             axis.plot(
-                centers,
-                _weighted_density(distribution, edges),
-                label=f"{name}  (N={distribution.diameter.size})",
-                color=SERIES_COLORS.get(name),
-                drawstyle="steps-mid",
+                centers, _weighted_density(distribution, edges),
+                label=label, color=color, linestyle=style, linewidth=1.9, drawstyle="steps-mid",
+            )
+    if x_max is not None and edges.size:
+        axis.set_xlim(0, x_max)
+    axis.set_xlabel("Diameter (µm)")
+    axis.set_ylabel("Weighted density (1/µm)")
+    axis.set_title("Common diameter histogram — primary range")
+    axis.grid(alpha=0.2)
+    _legend(axis, series)
+    figure.tight_layout()
+    path = output_dir / "figure-primary-histogram.png"
+    _save(figure, path)
+    return path
+
+
+def figure_full_histogram(series: list[tuple[str, DiameterDistribution]], output_dir: Path) -> Path:
+    figure = _new_figure()
+    axis = figure.add_subplot(111)
+    distributions = [item[1] for item in series]
+    edges = common_histogram_edges(distributions)
+    if not edges.size:
+        axis.text(0.5, 0.5, "No common distributions available", ha="center")
+    else:
+        centers = edges[:-1] + np.diff(edges) / 2.0
+        for name, distribution in series:
+            color, style, label = _series_style(name)
+            axis.plot(
+                centers, _weighted_density(distribution, edges),
+                label=label, color=color, linestyle=style, linewidth=1.9, drawstyle="steps-mid",
             )
     axis.set_xlabel("Diameter (µm)")
     axis.set_ylabel("Weighted density (1/µm)")
-    axis.set_title("Common diameter histogram")
+    axis.set_title("Common diameter histogram — full observed range")
     axis.grid(alpha=0.2)
-    axis.legend(fontsize="small")
+    _legend(axis, series)
     figure.tight_layout()
-    path = output_dir / "figure-histogram.png"
+    path = output_dir / "figure-full-histogram.png"
     _save(figure, path)
     return path
 
 
-def figure_ecdf(series: list[tuple[str, DiameterDistribution]], output_dir: Path) -> Path:
+def figure_ecdf_primary(series: list[tuple[str, DiameterDistribution]], output_dir: Path, x_max: float | None) -> Path:
     figure = _new_figure()
     axis = figure.add_subplot(111)
-    for name, distribution in series:
-        order = np.argsort(distribution.diameter, kind="stable")
-        x = distribution.diameter[order]
-        y = np.cumsum(distribution.weight[order]) / distribution.weight.sum()
-        axis.step(x, y, where="post", label=f"{name}  (N={distribution.diameter.size})", color=SERIES_COLORS.get(name))
-    axis.set_xlabel("Diameter (µm)")
-    axis.set_ylabel("Cumulative weight")
-    axis.set_title("Diameter ECDF comparison")
-    axis.grid(alpha=0.2)
-    axis.legend(fontsize="small")
-    figure.tight_layout()
-    path = output_dir / "figure-ecdf.png"
-    _save(figure, path)
-    return path
-
-
-def figure_field_estimators(comparison: UnifiedMethodComparison, output_dir: Path) -> Path:
-    figure = _new_figure()
-    axis = figure.add_subplot(111)
-    series = series_distributions(comparison)
-    field = [(name, dist) for name, dist in series if name in {label for _, label in FIELD_ESTIMATORS}]
-    edt = next(
-        (
-            (name, dist)
-            for name, dist in series
-            if name == display_name(MethodId.FATHOM_FIELD_GRAPH_V1)
-        ),
-        None,
-    )
-    if edt is not None:
-        field.insert(0, edt)
-    if not field:
-        axis.text(0.5, 0.5, "Field estimators unavailable for this image", ha="center")
-    else:
-        distributions = [item[1] for item in field]
-        edges = common_histogram_edges(distributions)
-        if edges.size:
-            centers = edges[:-1] + np.diff(edges) / 2.0
-            for name, distribution in field:
-                axis.plot(
-                    centers,
-                    _weighted_density(distribution, edges),
-                    label=f"{name}  (N={distribution.diameter.size})",
-                    color=SERIES_COLORS.get(name),
-                    drawstyle="steps-mid",
-                )
-    axis.set_xlabel("Diameter (µm)")
-    axis.set_ylabel("Weighted density (1/µm)")
-    axis.set_title("Field estimator comparison: EDT / Paired Edge / Intensity Profile")
-    axis.grid(alpha=0.2)
-    axis.legend(fontsize="small")
-    figure.tight_layout()
-    path = output_dir / "figure-field-estimators.png"
-    _save(figure, path)
-    return path
-
-
-def figure_weighted_boxplot(series: list[tuple[str, DiameterDistribution]], output_dir: Path) -> Path:
-    figure = _new_figure()
-    axis = figure.add_subplot(111)
-    boxes = []
-    labels = []
     for name, distribution in series:
         if not distribution.diameter.size:
             continue
-        summary = summarize_distribution(distribution)
-        if summary.p25 is None or summary.p75 is None:
+        order = np.argsort(distribution.diameter, kind="stable")
+        x = distribution.diameter[order]
+        y = np.cumsum(distribution.weight[order]) / distribution.weight.sum()
+        color, style, label = _series_style(name)
+        axis.step(x, y, where="post", label=label, color=color, linestyle=style, linewidth=1.9)
+    if x_max is not None:
+        axis.set_xlim(0, x_max)
+    axis.set_xlabel("Diameter (µm)")
+    axis.set_ylabel("Cumulative weight")
+    axis.set_title("Diameter ECDF — primary range")
+    axis.grid(alpha=0.2)
+    _legend(axis, series)
+    figure.tight_layout()
+    path = output_dir / "figure-primary-ecdf.png"
+    _save(figure, path)
+    return path
+
+
+def figure_ecdf_full(series: list[tuple[str, DiameterDistribution]], output_dir: Path) -> Path:
+    figure = _new_figure()
+    axis = figure.add_subplot(111)
+    for name, distribution in series:
+        if not distribution.diameter.size:
+            continue
+        order = np.argsort(distribution.diameter, kind="stable")
+        x = distribution.diameter[order]
+        y = np.cumsum(distribution.weight[order]) / distribution.weight.sum()
+        color, style, label = _series_style(name)
+        axis.step(x, y, where="post", label=label, color=color, linestyle=style, linewidth=1.9)
+    axis.set_xlabel("Diameter (µm)")
+    axis.set_ylabel("Cumulative weight")
+    axis.set_title("Diameter ECDF — full observed range")
+    axis.grid(alpha=0.2)
+    _legend(axis, series)
+    figure.tight_layout()
+    path = output_dir / "figure-full-ecdf.png"
+    _save(figure, path)
+    return path
+
+
+def figure_field_raw_vs_ribbon(comparison: UnifiedMethodComparison, output_dir: Path) -> Path:
+    """Two-panel comparison: raw estimators left, Ribbon re-measurements right."""
+    from matplotlib.gridspec import GridSpec
+
+    series = series_distributions(comparison)
+    raw = [item for item in series if item[0] in {"Fathom Field (EDT)", "Field Paired Edge", "Field Intensity Profile"}]
+    ribbon = [item for item in series if item[0] in {"Ribbon Refined EDT", "Ribbon Refined Edge", "Ribbon Refined Profile"}]
+    figure = _new_figure()
+    figure.set_size_inches(9.6, 4.2)
+    grid = GridSpec(1, 2, wspace=0.3, figure=figure)
+    for panel_index, (panel_series, title) in enumerate(
+        ((raw, "Field estimators — raw"), (ribbon, "Field estimators — Ribbon V1"))
+    ):
+        axis = figure.add_subplot(grid[panel_index])
+        distributions = [item[1] for item in panel_series]
+        edges = common_histogram_edges(distributions)
+        if not edges.size:
+            axis.text(0.5, 0.5, "No distributions", ha="center")
+        else:
+            centers = edges[:-1] + np.diff(edges) / 2.0
+            for name, distribution in panel_series:
+                color, style, label = _series_style(name)
+                axis.plot(
+                    centers, _weighted_density(distribution, edges),
+                    label=label, color=color, linestyle=style, linewidth=2.0, drawstyle="steps-mid",
+                )
+        axis.set_xlabel("Diameter (µm)")
+        axis.set_ylabel("Weighted density (1/µm)")
+        axis.set_title(title, fontsize="small")
+        axis.grid(alpha=0.2)
+        axis.legend(fontsize="small")
+    figure.suptitle("Field estimators — raw vs Oriented Ribbon V1", fontsize="medium")
+    figure.tight_layout()
+    path = output_dir / "figure-field-raw-vs-ribbon.png"
+    _save(figure, path)
+    return path
+
+
+def _weighted_box_bxp(axis, series: list[tuple[str, DiameterDistribution]], title: str) -> None:
+    from .core.distributions import weighted_quantile
+
+    boxes = []
+    labels = []
+    for name, distribution in series:
+        if distribution.diameter.size == 0:
+            continue
+        q = weighted_quantile(distribution.diameter, distribution.weight, np.array([0.05, 0.25, 0.5, 0.75, 0.95]))
+        if not np.isfinite(q).all():
             continue
         boxes.append(
             {
-                "med": summary.weighted_median,
-                "q1": summary.p25,
-                "q3": summary.p75,
-                "whislo": summary.p05 if summary.p05 is not None else summary.p25,
-                "whishi": summary.p95 if summary.p95 is not None else summary.p75,
+                "med": float(q[2]), "q1": float(q[1]), "q3": float(q[3]),
+                "whislo": float(q[0]), "whishi": float(q[4]),
             }
         )
-        labels.append(f"{name} (N={distribution.diameter.size})")
+        labels.append(short_name(name))
     if not boxes:
         axis.text(0.5, 0.5, "No comparable distributions", ha="center")
-    else:
-        axis.bxp(boxes, showfliers=False)
-        axis.set_xticklabels(labels, rotation=15, fontsize="small")
+        return
+    axis.bxp(boxes, showfliers=False)
+    axis.set_xticklabels(labels, rotation=20, fontsize="small")
     axis.set_ylabel("Diameter (µm)")
-    axis.set_title("Method summary — weighted P05/P25/P50/P75/P95")
-    axis.grid(alpha=0.2)
+    axis.set_title(title, fontsize="small")
+    axis.grid(alpha=0.2, axis="y")
+
+
+def figure_method_summary_primary(series: list[tuple[str, DiameterDistribution]], output_dir: Path) -> Path:
+    figure = _new_figure()
+    axis = figure.add_subplot(111)
+    _weighted_box_bxp(axis, _common_series(series), "Method summary — primary methods (weighted P05/P25/P50/P75/P95)")
     figure.tight_layout()
-    path = output_dir / "figure-method-summary.png"
+    path = output_dir / "figure-method-summary-primary.png"
+    _save(figure, path)
+    return path
+
+
+def figure_method_summary_full(series: list[tuple[str, DiameterDistribution]], output_dir: Path) -> Path:
+    figure = _new_figure()
+    axis = figure.add_subplot(111)
+    _weighted_box_bxp(axis, series, "Method summary — full range incl. Fathom Local (weighted P05/P25/P50/P75/P95)")
+    figure.tight_layout()
+    path = output_dir / "figure-method-summary-full.png"
+    _save(figure, path)
+    return path
+
+
+def figure_local_tail(series: list[tuple[str, DiameterDistribution]], output_dir: Path) -> Path:
+    figure = _new_figure()
+    axis = figure.add_subplot(111)
+    distributions = [item[1] for item in series]
+    edges = common_histogram_edges(distributions)
+    centers = edges[:-1] + np.diff(edges) / 2.0
+    for name, distribution in series:
+        color, style, label = _series_style(name)
+        axis.plot(
+            centers, _weighted_density(distribution, edges),
+            label=label, color=color, linestyle=style, linewidth=1.9, drawstyle="steps-mid",
+        )
+    axis.set_xlabel("Diameter (µm)")
+    axis.set_ylabel("Weighted density (1/µm)")
+    axis.set_title("Fathom Local — distribution tail in context")
+    axis.grid(alpha=0.2)
+    _legend(axis, series)
+    figure.tight_layout()
+    path = output_dir / "figure-local-tail.png"
     _save(figure, path)
     return path
 
 
 def _fmt(value: float | None, digits: int = 5) -> str:
     return "—" if value is None else f"{value:.{digits}g}"
+
+
+def _fmt_range(low: float | None, high: float | None) -> str:
+    if low is None or high is None:
+        return "—"
+    return f"{low:.5g}–{high:.5g}"
 
 
 def summary_row(result: MethodResult) -> tuple[tuple[str, ...], DistributionSummary | None]:
@@ -318,6 +481,357 @@ def _matlab_section(result: MethodResult | None) -> str:
     )
 
 
+def _estimate_table_rows(comparison: UnifiedMethodComparison) -> list[tuple[str, str, str, str, str, str, str, str]]:
+    """(method, status, N, coverage, mean, median, IQR, P05-P95) rows."""
+    rows: list[tuple[str, str, str, str, str, str, str, str]] = []
+    for result in comparison.results:
+        values, _summary = summary_row(result)
+        rows.append(
+            (
+                display_name(result.method_id),
+                values[1],
+                values[2],
+                "—",
+                values[3],
+                values[4],
+                values[5],
+                f"{values[6]}–{values[7]}",
+            )
+        )
+    return rows
+
+
+def _grouped_method_table(comparison: UnifiedMethodComparison) -> str:
+    from .report_style import grouped_table
+
+    def field_rows(estimator_names: list[tuple[str, str]]) -> list[list[Any]]:
+        field = next(
+            (r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None
+        )
+        rows: list[list[Any]] = []
+        if field is None:
+            return rows
+        statistics = field.native_statistics
+        coverage_by_key = {
+            "FATHOM_FIELD_REFINED_EDT_DIAMETER": statistics.get("smooth_coverage_fraction"),
+            "FATHOM_FIELD_REFINED_EDGE_DIAMETER": statistics.get("refined_edge_acceptance_fraction"),
+            "FATHOM_FIELD_REFINED_PROFILE_DIAMETER": statistics.get("refined_profile_acceptance_fraction"),
+        }
+        for key, label in estimator_names:
+            distribution = field.secondary_distributions.get(key)
+            status = "EXPERIMENTAL" if key.startswith("FATHOM_FIELD_REFINED_") else field.status.value
+            coverage = coverage_by_key.get(key)
+            if distribution is None:
+                rows.append([label, status, "—", "—", "—", "—", "—", "—"])
+                continue
+            summary = summarize_distribution(distribution)
+            rows.append(
+                [
+                    label, status, str(summary.n),
+                    "—" if coverage is None else f"{coverage:.1%}",
+                    _fmt(summary.weighted_mean), _fmt(summary.weighted_median),
+                    _fmt_range(summary.p25, summary.p75),
+                    f"{_fmt(summary.p05)}–{_fmt(summary.p95)}",
+                ]
+            )
+        return rows
+
+    headers = ["Method / estimator", "Status", "N", "Coverage", "Mean", "Median", "IQR", "P05–P95"]
+    groups: list[tuple[str, list[str], list[list[Any]]]] = []
+
+    matlab = next((r for r in comparison.results if r.method_id == MethodId.MATLAB_SIMPOLY), None)
+    python = next((r for r in comparison.results if r.method_id == MethodId.PYTHON_SIMPOLY), None)
+    local = next((r for r in comparison.results if r.method_id == MethodId.FATHOM_LOCAL), None)
+    manual = next((r for r in comparison.results if r.method_id == MethodId.MANUAL_5X5_REFERENCE), None)
+
+    reference_rows: list[list[Any]] = []
+    if matlab is not None:
+        reference_rows.append(
+            [
+                "MATLAB SIMPoly — native Gaussian center b1",
+                matlab.status.value, "—", "—", "—",
+                _fmt(matlab.native_result) + " µm", "—",
+                "Common sample distribution unavailable from current cache",
+            ]
+        )
+    if python is not None:
+        values, _summary = summary_row(python)
+        reference_rows.append([values[0], values[1], values[2], "—", values[3], values[4], values[5], f"{values[6]}–{values[7]}"])
+    groups.append(("REFERENCE / COMPATIBILITY", headers, reference_rows))
+
+    independent_rows: list[list[Any]] = []
+    if local is not None:
+        values, _summary = summary_row(local)
+        independent_rows.append([values[0], values[1], values[2], "—", values[3], values[4], values[5], f"{values[6]}–{values[7]}"])
+    groups.append(("INDEPENDENT ESTIMATOR", headers, independent_rows))
+
+    raw_field_rows = field_rows(
+        [
+            ("FATHOM_FIELD_PAIRED_EDGE_DIAMETER", "Raw Paired Edge"),
+            ("FATHOM_FIELD_PROFILE_DIAMETER", "Raw Intensity Profile"),
+        ]
+    )
+    field = next((r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None)
+    if field is not None and field.common_distribution is not None:
+        summary = summarize_distribution(field.common_distribution)
+        raw_field_rows.insert(
+            0,
+            [
+                "Raw EDT", field.status.value, str(summary.n), "—",
+                _fmt(summary.weighted_mean), _fmt(summary.weighted_median),
+                _fmt_range(summary.p25, summary.p75),
+                f"{_fmt(summary.p05)}–{_fmt(summary.p95)}",
+            ],
+        )
+    groups.append(("FATHOM FIELD — RAW", headers, raw_field_rows))
+
+    ribbon_rows = field_rows(
+        [
+            ("FATHOM_FIELD_REFINED_EDT_DIAMETER", "Ribbon EDT"),
+            ("FATHOM_FIELD_REFINED_EDGE_DIAMETER", "Ribbon Edge"),
+            ("FATHOM_FIELD_REFINED_PROFILE_DIAMETER", "Ribbon Profile"),
+        ]
+    )
+    groups.append(("FATHOM FIELD — ORIENTED RIBBON V1 (EXPERIMENTAL)", headers, ribbon_rows))
+
+    human_rows: list[list[Any]] = []
+    if manual is not None:
+        values, _summary = summary_row(manual)
+        human_rows.append(
+            [values[0], values[1], values[2], "—", values[3], values[4], values[5], f"{values[6]}–{values[7]}"]
+        )
+    groups.append(("HUMAN REFERENCE", headers, human_rows))
+
+    consensus = comparison.consensus
+    if consensus.distribution is not None:
+        summary = summarize_distribution(consensus.distribution)
+        groups.append(
+            (
+                "PSEUDO-REFERENCE",
+                headers,
+                [
+                    [
+                        "Consensus", "COMPLETE", str(summary.n), "—",
+                        _fmt(summary.weighted_mean), _fmt(summary.weighted_median),
+                        _fmt_range(summary.p25, summary.p75),
+                        f"{_fmt(summary.p05)}–{_fmt(summary.p95)}",
+                    ]
+                ],
+            )
+        )
+    return grouped_table(groups)
+
+
+def _scientific_summary_cards(comparison: UnifiedMethodComparison) -> str:
+    from .report_style import cards
+
+    series = {name: distribution for name, distribution in series_distributions(comparison)}
+    items: list[tuple[str, str, str]] = []
+
+    def median_of(name: str) -> str:
+        distribution = series.get(name)
+        if distribution is None:
+            return "—"
+        return _fmt(float(np.median(distribution.diameter))) + " µm"
+
+    for name in (
+        "Python SIMPoly",
+        "Fathom Field (EDT)",
+        "Field Paired Edge",
+        "Field Intensity Profile",
+        "Ribbon Refined EDT",
+        "Ribbon Refined Edge",
+        "Ribbon Refined Profile",
+        "Manual 5×5",
+    ):
+        items.append((median_of(name), "median " + short_name(name), _n_of(series.get(name))))
+
+    field = next(
+        (r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None
+    )
+    if field is not None:
+        statistics = field.native_statistics
+        items.append((_fmt(statistics.get("smooth_coverage_fraction"), 4), "Ribbon supported coverage", "fraction of samples with a refined centerline"))
+        items.append(
+            (
+                _fmt(statistics.get("edge_acceptance_fraction"), 4) + " → " + _fmt(statistics.get("refined_edge_acceptance_fraction"), 4),
+                "Edge acceptance raw → refined", "paired-edge acceptance",
+            )
+        )
+        items.append(
+            (
+                _fmt(statistics.get("refine_median_shift_um"), 4) + " → " + _fmt(statistics.get("refined_residual_shift_median_um"), 4) + " µm",
+                "Center shift observed → residual", "median values",
+            )
+        )
+        items.append(
+            (
+                _fmt(statistics.get("edge_median_asymmetry"), 4) + " → " + _fmt(statistics.get("refined_asymmetry_median"), 4),
+                "Asymmetry raw → refined", "median values",
+            )
+        )
+    return cards(items)
+
+
+def _n_of(distribution: DiameterDistribution | None) -> str:
+    return f"N = {distribution.diameter.size:,}" if distribution is not None else "N = —"
+
+
+def _refinement_effect_table(comparison: UnifiedMethodComparison) -> str:
+    from .report_style import table
+
+    field = next(
+        (r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None
+    )
+    if field is None:
+        return table([], [])
+    rows: list[list[Any]] = []
+    estimators = (
+        ("FATHOM_FIELD_PAIRED_EDGE_DIAMETER", "Paired Edge"),
+        ("FATHOM_FIELD_PROFILE_DIAMETER", "Intensity Profile"),
+    )
+    raw_common = field.common_distribution
+    if raw_common is not None:
+        summary = summarize_distribution(raw_common)
+        ribbon = field.secondary_distributions.get("FATHOM_FIELD_REFINED_EDT_DIAMETER")
+        rsummary = summarize_distribution(ribbon) if ribbon is not None else None
+        rows.append(
+            [
+                "EDT",
+                str(summary.n), _fmt(summary.weighted_median),
+                str(rsummary.n) if rsummary else "—", _fmt(rsummary.weighted_median) if rsummary else "—",
+                _fmt(rsummary.weighted_median - summary.weighted_median) if rsummary else "—",
+                _fmt(summary.p05), _fmt(summary.p95),
+                _fmt(rsummary.p05) if rsummary else "—", _fmt(rsummary.p95) if rsummary else "—",
+            ]
+        )
+    for key, label in estimators:
+        raw = field.secondary_distributions.get(key)
+        ribbon = field.secondary_distributions.get(key.replace("FATHOM_FIELD_", "FATHOM_FIELD_REFINED_"))
+        rsummary = summarize_distribution(ribbon) if ribbon is not None else None
+        if raw is None:
+            continue
+        summary = summarize_distribution(raw)
+        rows.append(
+            [
+                label,
+                str(summary.n), _fmt(summary.weighted_median),
+                str(rsummary.n) if rsummary else "—", _fmt(rsummary.weighted_median) if rsummary else "—",
+                _fmt(rsummary.weighted_median - summary.weighted_median) if rsummary else "—",
+                _fmt(summary.p05), _fmt(summary.p95),
+                _fmt(rsummary.p05) if rsummary else "—", _fmt(rsummary.p95) if rsummary else "—",
+            ]
+        )
+    return table(
+        ["Estimator", "Raw N", "Raw median", "Ribbon N", "Ribbon median",
+         "Median change", "Raw P05", "Raw P95", "Ribbon P05", "Ribbon P95"],
+        rows,
+    )
+
+
+def _agreement_section(comparison: UnifiedMethodComparison) -> str:
+    from .report_style import details, table
+
+    definitions = (
+        "<p>Wasserstein-1 reports the typical transport distance between two diameter "
+        "distributions, in µm. KS is the maximum separation between their cumulative "
+        "distributions. Median difference is the signed difference A − B in µm. "
+        "These quantify difference/agreement, not accuracy.</p>"
+    )
+    agreement_map = {
+        (item.left_method, item.right_method): item
+        for item in comparison.agreements
+        if item.wasserstein_1 is not None
+    }
+
+    def pair_rows(pairs) -> list[list[Any]]:
+        rows: list[list[Any]] = []
+        for left, right in pairs:
+            item = agreement_map.get((left, right)) or agreement_map.get((right, left))
+            if item is None:
+                continue
+            rows.append(
+                [
+                    display_name(left) + " vs " + display_name(right),
+                    _fmt(item.wasserstein_1), _fmt(item.ks_statistic), _fmt(item.median_difference),
+                ]
+            )
+        return rows
+
+    primary = pair_rows([(MethodId.PYTHON_SIMPOLY, MethodId.FATHOM_LOCAL), (MethodId.PYTHON_SIMPOLY, MethodId.FATHOM_FIELD_GRAPH_V1)])
+    field = next((r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None)
+    internal: list[list[Any]] = []
+    refinement: list[list[Any]] = []
+    if field is not None:
+        for name, label in (
+            ("FATHOM_FIELD_PAIRED_EDGE_DIAMETER", "Raw Edge vs Raw EDT"),
+            ("FATHOM_FIELD_PROFILE_DIAMETER", "Raw Profile vs Raw EDT"),
+        ):
+            distribution = field.secondary_distributions.get(name)
+            if distribution is not None and field.common_distribution is not None:
+                internal.append(
+                    [
+                        f"Field {label}",
+                        _fmt(_w1_pair(field.common_distribution.diameter, distribution.diameter)),
+                        _fmt(_ks_pair(field.common_distribution.diameter, distribution.diameter)),
+                        "—",
+                    ]
+                )
+        raw_edge = field.secondary_distributions.get("FATHOM_FIELD_PAIRED_EDGE_DIAMETER")
+        ribbon_edge = field.secondary_distributions.get("FATHOM_FIELD_REFINED_EDGE_DIAMETER")
+        if raw_edge is not None and ribbon_edge is not None:
+            refinement.append(
+                [
+                    "Raw Edge vs Ribbon Edge",
+                    _fmt(_w1_pair(raw_edge.diameter, ribbon_edge.diameter)),
+                    _fmt(_ks_pair(raw_edge.diameter, ribbon_edge.diameter)),
+                    "—",
+                ]
+            )
+        raw_edt = field.common_distribution
+        ribbon_edt = field.secondary_distributions.get("FATHOM_FIELD_REFINED_EDT_DIAMETER")
+        if raw_edt is not None and ribbon_edt is not None:
+            refinement.append(
+                [
+                    "Raw EDT vs Ribbon EDT",
+                    _fmt(_w1_pair(raw_edt.diameter, ribbon_edt.diameter)),
+                    _fmt(_ks_pair(raw_edt.diameter, ribbon_edt.diameter)),
+                    "—",
+                ]
+            )
+        raw_profile = field.secondary_distributions.get("FATHOM_FIELD_PROFILE_DIAMETER")
+        ribbon_profile = field.secondary_distributions.get("FATHOM_FIELD_REFINED_PROFILE_DIAMETER")
+        if raw_profile is not None and ribbon_profile is not None:
+            refinement.append(
+                [
+                    "Raw Profile vs Ribbon Profile",
+                    _fmt(_w1_pair(raw_profile.diameter, ribbon_profile.diameter)),
+                    _fmt(_ks_pair(raw_profile.diameter, ribbon_profile.diameter)),
+                    "—",
+                ]
+            )
+    headers = ["Comparison", "W1 (µm)", "KS", "Median Δ (µm)"]
+    body = definitions
+    body += "<h3>Primary cross-method comparisons</h3>" + (table(headers, primary) if primary else "<p>No comparable pairs.</p>")
+    body += "<h3>Field internal comparisons</h3>" + (table(headers, internal) if internal else "<p>No comparable pairs.</p>")
+    body += "<h3>Refinement effect</h3>" + (table(headers, refinement) if refinement else "<p>No comparable pairs.</p>")
+    all_rows = [
+        [display_name(item.left_method), display_name(item.right_method), _fmt(item.wasserstein_1), _fmt(item.ks_statistic), _fmt(item.median_difference)]
+        for item in comparison.agreements
+        if item.wasserstein_1 is not None
+    ]
+    body += details("Full pairwise comparison table (appendix)", table(["A", "B", "W1 (µm)", "KS", "Median Δ (µm)"], all_rows) if all_rows else "<p>No comparable pairs.</p>")
+    return body
+
+
+def _ks_pair(a: np.ndarray, b: np.ndarray) -> float | None:
+    from scipy.stats import ks_2samp
+
+    if a.size == 0 or b.size == 0:
+        return None
+    return float(ks_2samp(a, b).statistic)
+
+
 def build_image_report(
     comparison: UnifiedMethodComparison,
     image: Any,
@@ -327,191 +841,376 @@ def build_image_report(
     manual_count: int = 0,
 ) -> Path:
     """Render one image's scientific report and return its index.html path."""
+    from .report_style import (
+        cards,
+        info,
+        note,
+        page,
+        report_header,
+        section,
+        table,
+    )
+    from .report_style import (
+        figure as figure_block,
+    )
+
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     series = series_distributions(comparison)
-    figure_common_histogram(series, output)
-    figure_ecdf(series, output)
-    figure_field_estimators(comparison, output)
-    figure_weighted_boxplot(series, output)
+    x_max = _primary_x_max(series)
+    figure_primary_histogram(series, output, x_max)
+    figure_full_histogram(series, output)
+    figure_ecdf_primary(series, output, x_max)
+    figure_ecdf_full(series, output)
+    figure_field_raw_vs_ribbon(comparison, output)
+    figure_method_summary_primary(series, output)
+    figure_method_summary_full(series, output)
 
-    summary_rows = ""
-    for result in comparison.results:
-        values, _summary = summary_row(result)
-        method = values[0]
-        if method == MethodId.FATHOM_FIELD_GRAPH_V1.value:
-            method = "Fathom Field"
-        summary_rows += (
-            "<tr><td>" + html.escape(display_name(method))
-            + "</td><td>" + html.escape(values[1])
-            + "</td><td>" + html.escape(values[2])
-            + "</td><td>" + html.escape(values[3])
-            + "</td><td>" + html.escape(values[4])
-            + "</td><td>" + html.escape(values[5])
-            + "</td><td>" + html.escape(values[6])
-            + "</td><td>" + html.escape(values[7]) + "</td></tr>"
-        )
+    local_ratio = _long_tail_ratio(series, "Fathom Local")
+    common_ratio = _long_tail_ratio(series, "Python SIMPoly")
+    tail_triggered = bool(
+        local_ratio is not None and (common_ratio is None or local_ratio > max(2.5, 2.0 * (common_ratio or 1.0)))
+    )
+    if tail_triggered:
+        figure_local_tail(series, output)
 
-    agreement_rows = ""
-    for item in valid_agreements(comparison):
-        agreement_rows += (
-            "<tr><td>" + html.escape(display_name(item.left_method))
-            + "</td><td>" + html.escape(display_name(item.right_method))
-            + "</td><td>" + _fmt(item.wasserstein_1)
-            + "</td><td>" + _fmt(item.ks_statistic)
-            + "</td><td>" + _fmt(item.median_difference) + "</td></tr>"
-        )
-    agreement_rows = agreement_rows or "<tr><td colspan='5'>No comparable distributions.</td></tr>"
-
+    calibration = image.calibration
+    metadata = dict(image.metadata or {})
     field = next(
-        (result for result in comparison.results if result.method_id == MethodId.FATHOM_FIELD_GRAPH_V1),
-        None,
+        (r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None
     )
-    field_rows, field_notes = _field_diagnostics(field)
+    matlab = next((r for r in comparison.results if r.method_id == MethodId.MATLAB_SIMPOLY), None)
+    manual = next((r for r in comparison.results if r.method_id == MethodId.MANUAL_5X5_REFERENCE), None)
 
-    quality_rows = ""
-    for result in comparison.results:
-        quality_rows += (
-            "<tr><td>" + html.escape(display_name(result.method_id))
-            + "</td><td>" + html.escape(result.status.value)
-            + "</td><td>" + html.escape(", ".join(result.quality_flags) or "—") + "</td></tr>"
-        )
-    flag_breakdown = _flag_breakdown(comparison)
-
-    matlab = next(
-        (result for result in comparison.results if result.method_id == MethodId.MATLAB_SIMPOLY),
-        None,
-    )
-    manual = next(
-        (result for result in comparison.results if result.method_id == MethodId.MANUAL_5X5_REFERENCE),
-        None,
-    )
     if manual_complete is None and manual is not None:
         manual_complete = manual.status == MethodStatus.COMPLETE and (
             manual.native_statistics.get("measurement_count", 0) >= 25
         )
         manual_count = int(manual.native_statistics.get("measurement_count", 0))
-    manual_rows = ""
-    if manual is None or manual.status == MethodStatus.NOT_MEASURED:
-        manual_rows = "<tr><td>Manual 5×5</td><td>0 / 25 measurements complete</td><td>INCOMPLETE REFERENCE</td></tr>"
-    elif manual_complete:
-        manual_rows = (
-            "<tr><td>Manual 5×5</td><td>25 / 25 measurements complete</td>"
-            "<td>Distribution included above; reference remains operator-defined.</td></tr>"
-        )
+
+    chips = [
+        ("Calibration", f"{calibration.pixel_size_x_m * 1e9:.5g} × {calibration.pixel_size_y_m * 1e9:.5g} nm/px ({calibration.source})"),
+        ("ROI", str(next((result.valid_roi for result in comparison.results if result.valid_roi), None))),
+    ]
+    if metadata.get("ap_mag") is not None:
+        chips.append(("Magnification", str(metadata["ap_mag"])))
+    if metadata.get("ap_actualkv") is not None:
+        chips.append(("EHT", f"{metadata['ap_actualkv']} kV"))
+    chips.append(("Generated", datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")))
+    badges = [("AUTOMATIC ANALYSIS COMPLETE", "ok")]
+    if manual is not None and manual.status != MethodStatus.NOT_MEASURED:
+        badges.append(("MANUAL REFERENCE INCOMPLETE" if not manual_complete else "MANUAL REFERENCE COMPLETE", "warn" if not manual_complete else "ok"))
     else:
-        manual_rows = (
-            f"<tr><td>Manual 5×5</td><td>{manual_count} / 25 measurements complete</td>"
-            "<td>INCOMPLETE REFERENCE</td></tr>"
+        badges.append(("MANUAL REFERENCE INCOMPLETE", "warn"))
+    badges.append(("RIBBON EXPERIMENTAL", "exp"))
+
+    head = report_header(
+        "Fathom Fibers — Scientific Fiber Morphology Analysis",
+        comparison.image_id,
+        chips,
+        badges,
+    )
+
+    summary_cards = _scientific_summary_cards(comparison)
+    body = section(
+        "Scientific Summary",
+        summary_cards
+        + "<p>Median diameters per method (µm). Coverage and acceptance describe the "
+        "fraction of supported samples; unmeasured quantities show —.</p>",
+    )
+
+    body += section(
+        "Key diameter results",
+        _grouped_method_table(comparison)
+        + note(
+            "Consensus is a pseudo-reference across participating methods, not ground truth. "
+            "Measurements represent projected 2-D geometry."
+        ),
+    )
+
+    refinement_metrics = ""
+    if field is not None:
+        statistics = field.native_statistics
+        refinement_metrics = cards(
+            [
+                (str(statistics.get("smooth_segment_count", "—")), "Refined segments", "supported non-branching runs"),
+                (_fmt(statistics.get("refine_median_shift_um"), 4) + " µm", "Median observed center shift", "before refinement"),
+                (_fmt(statistics.get("refined_residual_shift_median_um"), 4) + " µm", "Median residual center shift", "after refinement"),
+                (_fmt(statistics.get("smooth_coverage_fraction"), 4), "Supported centerline coverage", "abstentions are intentional"),
+            ]
+        )
+        body += section(
+            "Centerline refinement effect",
+            _refinement_effect_table(comparison)
+            + refinement_metrics
+            + info(
+                "Oriented Ribbon V1 estimates a local geometric centerline from paired opposite "
+                "boundaries and re-measures the Field estimators on supported, non-ambiguous "
+                "centerline segments. <b>EXPERIMENTAL</b> — known-truth synthetic validation "
+                "supports the centerline mechanism; real SEM comparisons characterize behavior "
+                "and agreement, not known absolute accuracy."
+            ),
         )
 
-    calibration = image.calibration
-    metadata = dict(image.metadata or {})
-    document = f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Fathom Fibers — {html.escape(comparison.image_id)}</title>
-<style>body{{font:14px system-ui,sans-serif;margin:2rem;color:#20242a;max-width:1100px}}table{{border-collapse:collapse;width:100%;margin:1rem 0}}th,td{{border:1px solid #ccd2d8;padding:.4rem;text-align:left}}th{{background:#eef1f4}}img{{max-width:100%;border:1px solid #c8cdd4}}code{{background:#f4f4f4;padding:.1rem .3rem}}h2{{border-bottom:1px solid #d4d9df;padding-bottom:.2rem}}.note{{border-left:4px solid #b7791f;background:#fff9e6;padding:.7rem}}</style></head><body>
-<h1>Fathom Fibers Scientific Analysis</h1>
-<p class="note">Agreement and consensus pseudo-reference are not ground truth. Measurements represent projected 2-D geometry.</p>
-<h2>Image</h2>
-<table><tr><th>Identity</th><td>{html.escape(comparison.image_id)}</td></tr>
-<tr><th>Calibration</th><td>{calibration.pixel_size_x_m * 1e9:.5g} × {calibration.pixel_size_y_m * 1e9:.5g} nm/px ({html.escape(calibration.source)})</td></tr>
-<tr><th>ROI</th><td>{html.escape(str(next((result.valid_roi for result in comparison.results if result.valid_roi), None)))}</td></tr>
-<tr><th>Magnification</th><td>{html.escape(str(metadata.get("ap_mag", "—")))}</td></tr>
-<tr><th>EHT</th><td>{html.escape(str(metadata.get("ap_actualkv", "—")))}</td></tr>
-<tr><th>Generated</th><td>{datetime.now(UTC).isoformat()}</td></tr></table>
-<h2>Method summary</h2>
-<table><tr><th>Method</th><th>Status</th><th>N</th><th>Mean</th><th>Median</th><th>IQR</th><th>P05</th><th>P95</th></tr>{summary_rows}</table>
-<h2>MATLAB SIMPoly cache</h2>
-<table><tr><th>Quantity</th><th>Value</th><th>Source</th></tr>{_matlab_section(matlab)}</table>
-<h2>Distributions</h2>
-<img src="figure-histogram.png" alt="Common diameter histogram">
-<img src="figure-ecdf.png" alt="Diameter ECDF">
-<h2>Field estimator comparison</h2>
-{field_notes}
-<img src="figure-field-estimators.png" alt="Field estimator comparison">
-<h2>Field diagnostics</h2>
-<table><tr><th>Field estimator</th><th>N</th><th>Median (µm)</th><th>IQR</th><th>P05</th><th>P95</th></tr>{field_rows}</table>
-<h2>Method summary box</h2>
-<img src="figure-method-summary.png" alt="Weighted method summary">
-<h2>Method differences (common estimand)</h2>
-<table><tr><th>A</th><th>B</th><th>Wasserstein-1 (µm)</th><th>KS</th><th>Median difference (µm)</th></tr>{agreement_rows}</table>
-<h2>Quality</h2>
-<table><tr><th>Method</th><th>Status</th><th>Flags</th></tr>{quality_rows}</table>
-{flag_breakdown}
-<h2>Manual reference</h2>
-<table><tr><th>Method</th><th>Progress</th><th>Status</th></tr>{manual_rows}</table>
-</body></html>"""
+    body += section(
+        "Distributions",
+        "<h3>Primary range</h3>"
+        + figure_block(
+            "figure-primary-histogram.png",
+            "Common diameter histogram, primary range",
+            "Length-weighted diameter distributions for the common estimators. The primary "
+            "view is restricted to the central comparison range for readability; the "
+            "full-range view preserves long-tailed observations. The data are never filtered.",
+        )
+        + figure_block(
+            "figure-primary-ecdf.png",
+            "Diameter ECDF, primary range",
+            "Fraction of weighted measurements below a given diameter (primary range).",
+        )
+        + "<h3>Full observed range</h3>"
+        + figure_block(
+            "figure-full-histogram.png",
+            "Common diameter histogram, full range",
+            "The entire supported observed range, including alternative estimators with "
+            "longer tails.",
+        )
+        + figure_block(
+            "figure-full-ecdf.png",
+            "Diameter ECDF, full range",
+            "Fraction of weighted measurements below a given diameter (full range).",
+        ),
+    )
+
+    if tail_triggered:
+        local_distribution = next((d for name, d in series if name == "Fathom Local"), None)
+        local_rows = ""
+        if local_distribution is not None:
+            local_summary = summarize_distribution(local_distribution)
+            local_rows = table(
+                ["N", "Median", "IQR", "P95", "Max"],
+                [
+                    [
+                        str(local_summary.n),
+                        _fmt(local_summary.weighted_median),
+                        _fmt_range(local_summary.p25, local_summary.p75),
+                        _fmt(local_summary.p95),
+                        _fmt(float(np.nanmax(local_distribution.diameter))),
+                    ]
+                ],
+            )
+        body += section(
+            "Fathom Local — distribution tail",
+            local_rows
+            + figure_block(
+                "figure-local-tail.png",
+                "Fathom Local distribution tail in context",
+                "Fathom Local shows a broader/right-tailed distribution in this image; its full "
+                "observed range remains visible and no observations are removed.",
+            )
+            + note(
+                "A broad/right-tailed distribution indicates that the local cross-section "
+                "estimator samples a wider range of candidate geometries in this image. "
+                "Diagnostic flags below provide context where available."
+            ),
+        )
+
+    body += section(
+        "Field estimators — raw vs Ribbon",
+        figure_block(
+            "figure-field-raw-vs-ribbon.png",
+            "Field estimators raw vs Ribbon V1",
+            "Raw and Ribbon re-measured estimators share the same bin edges and x-range; "
+            "Ribbon uses the refined centerline on supported segments.",
+        ),
+    )
+
+    body += section(
+        "Method summary",
+        figure_block(
+            "figure-method-summary-primary.png",
+            "Primary method summary",
+            "Weighted percentiles: box = P25–P75, center = P50, whiskers = P05–P95. "
+            "Fathom Local is shown separately in the full-range summary.",
+        )
+        + figure_block(
+            "figure-method-summary-full.png",
+            "Full-range method summary",
+            "Weighted percentiles over the full observed range, including Fathom Local. "
+            "Box = P25–P75, center = P50, whiskers = P05–P95.",
+        ),
+    )
+
+    body += section("Method agreement", _agreement_section(comparison))
+
+    body += _quality_section_v2(comparison)
+
+    if manual is None or manual.status == MethodStatus.NOT_MEASURED:
+        body += section(
+            "Manual reference",
+            note("Manual 5×5: 0 / 25 measurements — <b>INCOMPLETE REFERENCE</b>. "
+                 "Missing manual values are never filled in."),
+        )
+    elif manual_complete:
+        body += section(
+            "Manual reference",
+            note("Manual 5×5: 25 / 25 measurements — reference complete. "
+                 "Manual is a sparse human reference, not ground truth."),
+        )
+    else:
+        body += section(
+            "Manual reference",
+            note(
+                f"Manual 5×5: {manual_count} / 25 measurements — <b>INCOMPLETE REFERENCE</b>. "
+                "Missing manual values are never filled in."
+            ),
+        )
+
+    body += _methods_cards(comparison)
+    body += _matlab_card_v2(matlab)
+    body += section("Provenance", _provenance_v2(comparison, image, matlab))
+    body += section("Limitations", _limitations_v2(comparison))
+
+    document = page(f"Fathom Fibers — {comparison.image_id}", head_html=head, body_html=body)
     index = output / "index.html"
     index.write_text(document, encoding="utf-8")
     return index
 
 
-def _field_diagnostics(field: MethodResult | None) -> tuple[str, str]:
-    if field is None:
-        return (
-            "<tr><td colspan='6'>Fathom Field not available.</td></tr>",
-            "<p>Fathom Field is not available for this image.</p>",
-        )
-    stats_payload = field.native_statistics
-    rows = ""
-    for name, label in (
-        ("FATHOM_FIELD_PAIRED_EDGE_DIAMETER", "Paired Edge"),
-        ("FATHOM_FIELD_PROFILE_DIAMETER", "Intensity Profile"),
-    ):
-        distribution = field.secondary_distributions.get(name)
-        if distribution is None:
-            rows += f"<tr><td>{label}</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>"
-            continue
-        summary = summarize_distribution(distribution)
-        iqr = (
-            f"{summary.p25:.5g}–{summary.p75:.5g}"
-            if summary.p25 is not None and summary.p75 is not None
-            else "—"
-        )
-        rows += (
-            f"<tr><td>{label}</td><td>{summary.n}</td><td>{_fmt(summary.weighted_median)}</td>"
-            f"<td>{iqr}</td><td>{_fmt(summary.p05)}</td><td>{_fmt(summary.p95)}</td></tr>"
-        )
-    if field.common_distribution is not None:
-        summary = summarize_distribution(field.common_distribution)
-        rows += (
-            f"<tr><td>EDT</td><td>{summary.n}</td><td>{_fmt(summary.weighted_median)}</td>"
-            f"<td>{_fmt(summary.p25)}–{_fmt(summary.p75)}</td><td>{_fmt(summary.p05)}</td>"
-            f"<td>{_fmt(summary.p95)}</td></tr>"
-        )
-    coherence = stats_payload.get("mean_coherence")
-    edge_acceptance = stats_payload.get("edge_acceptance_fraction")
-    profile_acceptance = stats_payload.get("profile_acceptance_fraction")
-    asymmetry = stats_payload.get("edge_median_asymmetry")
-    notes = (
-        "<p>"
-        f"Mean coherence: <b>{_fmt(coherence, 4)}</b>. "
-        f"Paired-edge acceptance: <b>{'—' if edge_acceptance is None else f'{edge_acceptance:.2%}'}</b>. "
-        f"Intensity-profile acceptance: <b>{'—' if profile_acceptance is None else f'{profile_acceptance:.2%}'}</b>. "
-        f"Median edge asymmetry: <b>{_fmt(asymmetry, 4)}</b>.</p>"
+def _quality_section_v2(comparison: UnifiedMethodComparison) -> str:
+    from .report_style import cards, details, info, section, table
+
+    field = next(
+        (r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None
     )
-    return rows, notes
+    summary_cards: list[tuple[str, str, str]] = []
+    important_rows: list[list[Any]] = []
+    for result in comparison.results:
+        summary_cards.append(
+            (result.status.value, display_name(result.method_id), f"{len(result.quality_flags)} flags")
+        )
+    if field is not None:
+        statistics = field.native_statistics
+        summary_cards.append(("—", "Ribbon supported coverage", _fmt(statistics.get("smooth_coverage_fraction"), 4)))
+        summary_cards.append(("—", "Raw → refined Edge acceptance", _fmt(statistics.get("edge_acceptance_fraction"), 4) + " → " + _fmt(statistics.get("refined_edge_acceptance_fraction"), 4)))
 
+    important_flags = {
+        "POSSIBLE_CROSSING",
+        "AMBIGUOUS_LOCAL_WIDTH",
+        "PROFILE_AMBIGUOUS_EDGE",
+        "REFINED_ORIENTATION_DISAGREEMENT",
+    }
+    if field is not None:
+        counts: dict[str, int] = {}
+        for flags in field.local_samples["edge_flags"]:
+            for flag in str(flags).split(";"):
+                if flag:
+                    counts[flag] = counts.get(flag, 0) + 1
+        for flags in field.local_samples["profile_flags"]:
+            for flag in str(flags).split(";"):
+                if flag:
+                    counts[flag] = counts.get(flag, 0) + 1
+        for flag in sorted(counts):
+            if flag in important_flags:
+                important_rows.append([flag, counts[flag], _flag_text(flag)])
 
-def _flag_breakdown(comparison: UnifiedMethodComparison) -> str:
-    sections = ""
+    flag_sections = ""
     for result in comparison.results:
         if not result.quality_flags:
             continue
-        counts: dict[str, int] = {}
-        for flag in result.quality_flags:
-            counts[flag] = counts.get(flag, 0) + 1
         rows = "".join(
-            f"<tr><td>{html.escape(flag)}</td><td>{count}</td></tr>"
-            for flag, count in sorted(counts.items())
+            f"<tr><td>{flag}</td><td>{_flag_text(flag)}</td></tr>"
+            for flag in sorted(result.quality_flags)
         )
-        sections += (
-            f"<h3>Flag breakdown — {html.escape(display_name(result.method_id))}</h3>"
-            f"<table><tr><th>Flag</th><th>Count</th></tr>{rows}</table>"
+        flag_sections += f"<h3>{display_name(result.method_id)}</h3><table><tr><th>Flag</th><th>Meaning</th></tr>{rows}</table>"
+    body = cards(summary_cards)
+    body += "<h3>Important diagnostics</h3>"
+    body += table(["Flag", "Count", "Meaning"], important_rows) if important_rows else "<p>No important diagnostics flagged.</p>"
+    body += info(
+        "Ribbon coverage below 100% is not automatically a failure: unsupported samples "
+        "include intentionally abstained regions (crossings, junctions, gaps, "
+        "low-confidence geometry). Abstention is preferable to inventing a measurement."
+    )
+    body += details("Full flag breakdown (technical)", flag_sections or "<p>No flags recorded.</p>")
+    return section("Quality / abstention", body)
+
+
+def _flag_text(flag: str) -> str:
+    from .report_style import flag_definition
+
+    return flag_definition(flag) or flag
+
+
+def _methods_cards(comparison: UnifiedMethodComparison) -> str:
+    from .report_style import cards, section
+
+    rows = [
+        ("MATLAB SIMPoly", "Reference/native implementation from a validated cache.", "COMPLETE (cache)"),
+        ("Python SIMPoly", "Python source-compatible approximation; calibrated length-weighted diameters on the skeleton.", "COMPLETE"),
+        ("Fathom Local", "Independent local cross-section estimator; not truth and may show a broader distribution.", "COMPLETE"),
+        ("Fathom Field", "Structure-tensor orientation plus local boundary metrology (EDT / paired edge / intensity profile).", "EXPERIMENTAL"),
+        ("Oriented Ribbon V1", "Experimental refined centerline and re-measurement of the Field estimators.", "EXPERIMENTAL"),
+        ("Manual 5×5", "Sparse human reference grid; not ground truth.", "REFERENCE"),
+        ("Consensus", "Equal-method quantile pseudo-reference across participating methods; not ground truth.", "REFERENCE"),
+    ]
+    return section("Methods", cards([("", label, purpose + " " + status) for label, purpose, status in rows]))
+
+
+def _matlab_card_v2(matlab: MethodResult | None) -> str:
+    from .report_style import cards, info, section
+
+    if matlab is None:
+        return section("MATLAB SIMPoly", info("MATLAB SIMPoly not available for this image."))
+    if matlab.status != MethodStatus.COMPLETE:
+        return section("MATLAB SIMPoly", info(f"Status: {matlab.status.value}."))
+    provenance = matlab.provenance
+    b1 = matlab.native_statistics.get("gauss_b1", matlab.native_result)
+    version = provenance.get("matlab_version", "R2026a")
+    return section(
+        "MATLAB SIMPoly",
+        cards(
+            [
+                (f"{_fmt(b1, 6)} µm", "Native Gaussian center b1", f"reference {version}"),
+                ("unavailable", "Common local distribution", "no raw diameter array in the current cache"),
+            ]
         )
-    if not sections:
-        return ""
-    return f"<h2>Field flag breakdown</h2>{sections}"
+        + info(
+            "The MATLAB cache reports the native Gaussian center b1. A common sample "
+            "distribution is unavailable from the current cache, so no histogram or ECDF "
+            "is fabricated for MATLAB."
+        ),
+    )
+
+
+def _provenance_v2(comparison: UnifiedMethodComparison, image: Any, matlab: MethodResult | None) -> str:
+    from .report_style import details, table
+
+    rows: list[list[Any]] = [
+        ["Image", comparison.image_id],
+        ["Calibration", f"{image.calibration.pixel_size_x_m * 1e9:.5g} × {image.calibration.pixel_size_y_m * 1e9:.5g} nm/px ({image.calibration.source})"],
+        ["Source", str(image.source_path)],
+    ]
+    for result in comparison.results:
+        rows.append([f"Method {display_name(result.method_id)}", f"version {result.method_version} · status {result.status.value}"])
+    if matlas := matlab:
+        for key in ("source_matlab_sha256", "cache_representation", "matlab_version"):
+            if matlas.provenance.get(key):
+                rows.append([f"MATLAB {key}", str(matlas.provenance[key])])
+    return details("Provenance / Reproducibility", table(["Item", "Value"], rows))
+
+
+def _limitations_v2(comparison: UnifiedMethodComparison) -> str:
+    from .report_style import info
+
+    items = [
+        "Measurements represent projected 2-D geometry; no 3-D claim is made.",
+        "Agreement metrics and the consensus pseudo-reference are not ground truth.",
+        "Manual 5×5 is a sparse human reference, not ground truth.",
+        "MATLAB SIMPoly reports the native b1 statistic; a common raw distribution is unavailable from the current cache.",
+        "Oriented Ribbon V1 is EXPERIMENTAL; real SEM comparisons characterize behavior and agreement, not known absolute accuracy.",
+        "Unsupported or crossing regions may be intentionally abstained rather than measured.",
+        "Fathom Local may show broad or right-tailed candidates depending on image geometry; quality flags provide context.",
+    ]
+    return info("<ul>" + "".join(f"<li>{item}</li>" for item in items) + "</ul>")
 
 
 def build_dataset_report(
@@ -926,6 +1625,7 @@ def _final_figures(output: Path, comparisons: list[Any], metrics: dict[str, Any]
     stems = [Path(c.image_id).stem.replace("PVDF Jose_", "J") for c in comparisons]
     x = np.arange(len(comparisons))
     medians = {key: [] for key in ("edt_raw", "edt_refined", "edge_raw", "edge_refined", "profile_raw", "profile_refined")}
+
     shifts = {"observed": [], "residual": []}
     asymmetry = {"raw": [], "refined": []}
     coverage: list[float | None] = []
@@ -934,74 +1634,95 @@ def _final_figures(output: Path, comparisons: list[Any], metrics: dict[str, Any]
         values = _per_image_estimator_medians(field)
         for key, bucket in medians.items():
             bucket.append(values[key])
-
         shifts["observed"].append(values["center_shift_median_um"])
         shifts["residual"].append(values["residual_shift_median_um"])
         asymmetry["raw"].append(values["asymmetry_raw"])
         asymmetry["refined"].append(values["asymmetry_refined"])
         coverage.append(values["smooth_coverage"])
 
-    figure = Figure(figsize=(9, 4))
+    figure = Figure(figsize=(10, 4))
     axis = figure.add_subplot(111)
-    for offset, (label, key) in enumerate(
-        (("EDT raw", "edt_raw"), ("EDT refined", "edt_refined"),
-         ("Edge raw", "edge_raw"), ("Edge refined", "edge_refined"))
+    for method_id, marker, color in (
+        (MethodId.PYTHON_SIMPOLY, "o", "#e69f00"),
+        (MethodId.FATHOM_LOCAL, "s", "#009e73"),
     ):
-        axis.plot(x + offset * 0.2, medians[key], ".", color=SERIES_COLORS.get(label, "#333333"), label=label)
+        values = []
+        for comparison in comparisons:
+            result = next((r for r in comparison.results if r.method_id == method_id), None)
+            distribution = result.common_distribution if result is not None else None
+            values.append(float(np.median(distribution.diameter)) if distribution is not None else None)
+        axis.plot(x, values, marker, color=color, label=short_name(display_name(method_id)), ms=5)
     axis.set_xticks(x)
     axis.set_xticklabels(stems, rotation=45, ha="right", fontsize="small")
     axis.set_ylabel("Median diameter (µm)")
-    axis.set_title("Raw vs refined EDT and Edge medians by image")
+    axis.set_title("Per-image method medians")
     axis.legend(fontsize="small")
+    axis.grid(alpha=0.2, axis="y")
     figure.tight_layout()
     save(figure, "dataset-figure-A.png")
 
-    figure = Figure(figsize=(9, 4))
+    figure = Figure(figsize=(10, 4))
     axis = figure.add_subplot(111)
-    axis.plot(x, metrics["w1_edt_edge_raw"], "o-", color="#c9a227", label="W1 raw EDT\u2194Edge")
-    axis.plot(x, metrics["w1_edt_edge_refined"], "s-", color="#2f9e63", label="W1 refined EDT\u2194Edge")
+    axis.plot(x, medians["edt_raw"], "o--", color="#9aa7c9", label="Raw EDT", ms=5)
+    axis.plot(x, medians["edt_refined"], "o-", color="#4d648d", label="Ribbon EDT", ms=5)
     axis.set_xticks(x)
     axis.set_xticklabels(stems, rotation=45, ha="right", fontsize="small")
-    axis.set_ylabel("Wasserstein-1 (µm)")
-    axis.set_title("Pairwise EDT\u2194Edge agreement, raw vs refined")
+    axis.set_ylabel("Median diameter (µm)")
+    axis.set_title("Raw EDT vs Ribbon EDT by image")
     axis.legend(fontsize="small")
+    axis.grid(alpha=0.2, axis="y")
     figure.tight_layout()
     save(figure, "dataset-figure-B.png")
 
-    figure = Figure(figsize=(9, 4))
+    figure = Figure(figsize=(10, 4))
     axis = figure.add_subplot(111)
-    axis.plot(x, shifts["observed"], "o-", color="#c9a227", label="observed center shift")
-    axis.plot(x, shifts["residual"], "s-", color="#2f9e63", label="residual center shift")
+    axis.plot(x, metrics["w1_edt_edge_raw"], "o--", color="#9aa7c9", label="W1 raw EDT↔Edge", ms=5)
+    axis.plot(x, metrics["w1_edt_edge_refined"], "o-", color="#4d648d", label="W1 Ribbon EDT↔Edge", ms=5)
+    axis.set_xticks(x)
+    axis.set_xticklabels(stems, rotation=45, ha="right", fontsize="small")
+    axis.set_ylabel("Wasserstein-1 (µm)")
+    axis.set_title("Pairwise EDT↔Edge agreement, raw vs Ribbon")
+    axis.legend(fontsize="small")
+    axis.grid(alpha=0.2, axis="y")
+    figure.tight_layout()
+    save(figure, "dataset-figure-C.png")
+
+    figure = Figure(figsize=(10, 4))
+    axis = figure.add_subplot(111)
+    axis.plot(x, shifts["observed"], "o--", color="#b7791f", label="observed center shift", ms=5)
+    axis.plot(x, shifts["residual"], "o-", color="#3b7f7f", label="residual center shift", ms=5)
     axis.set_xticks(x)
     axis.set_xticklabels(stems, rotation=45, ha="right", fontsize="small")
     axis.set_ylabel("Median shift (µm)")
     axis.set_title("Observed vs residual center shift by image")
     axis.legend(fontsize="small")
+    axis.grid(alpha=0.2, axis="y")
     figure.tight_layout()
-    save(figure, "dataset-figure-C.png")
+    save(figure, "dataset-figure-D.png")
 
-    figure = Figure(figsize=(9, 4))
+    figure = Figure(figsize=(10, 4))
     axis = figure.add_subplot(111)
-    axis.plot(x, asymmetry["raw"], "o-", color="#c9a227", label="asymmetry raw")
-    axis.plot(x, asymmetry["refined"], "s-", color="#2f9e63", label="asymmetry refined")
+    axis.plot(x, asymmetry["raw"], "o--", color="#9cc4c4", label="asymmetry raw", ms=5)
+    axis.plot(x, asymmetry["refined"], "o-", color="#3b7f7f", label="asymmetry refined", ms=5)
     axis.set_xticks(x)
     axis.set_xticklabels(stems, rotation=45, ha="right", fontsize="small")
     axis.set_ylabel("Median asymmetry")
     axis.set_title("Paired-edge asymmetry, raw vs refined")
     axis.legend(fontsize="small")
+    axis.grid(alpha=0.2, axis="y")
     figure.tight_layout()
-    save(figure, "dataset-figure-D.png")
+    save(figure, "dataset-figure-E.png")
 
-    figure = Figure(figsize=(9, 4))
+    figure = Figure(figsize=(10, 4))
     axis = figure.add_subplot(111)
-    axis.bar(x, coverage, color="#386cb0")
+    axis.bar(x, coverage, color="#4d648d")
     axis.set_xticks(x)
     axis.set_xticklabels(stems, rotation=45, ha="right", fontsize="small")
     axis.set_ylabel("Coverage")
     axis.set_ylim(0, 1)
     axis.set_title("Supported refined-centerline coverage by image")
     figure.tight_layout()
-    save(figure, "dataset-figure-E.png")
+    save(figure, "dataset-figure-F.png")
 
 
 def build_final_dataset_report(
@@ -1017,6 +1738,17 @@ def build_final_dataset_report(
     ``comparisons`` may carry already-loaded caches so callers that build a
     bundle avoid decompressing the full NPZ stores twice.
     """
+    from .report_style import (
+        cards,
+        note,
+        page,
+        report_header,
+        section,
+    )
+    from .report_style import (
+        figure as figure_block,
+    )
+
     repo = Path(repo)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -1031,118 +1763,273 @@ def build_final_dataset_report(
     metrics = _dataset_ribbon_metrics(comparisons)
     _final_figures(output, comparisons, metrics)
 
-    per_image_rows = ""
+    head = report_header(
+        "Fathom Fibers — Scientific Morphological Fiber Analysis",
+        "Dataset-level report generated from cached analysis results.",
+        [
+            ("Dataset", str(dataset.dataset_id)),
+            ("Generated", datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")),
+            ("Cache schema", cache.FULL_SCHEMA),
+        ],
+        [("ORIENTED RIBBON V1 EXPERIMENTAL", "exp")],
+    )
+
+    # executive overview
+    manual_total = manual_store.total_measured if manual_store is not None else 0
+    overview_cards = cards(
+        [
+            (str(len(dataset.images)), "Images", "dataset images"),
+            (f"{len(comparisons)} / {len(dataset.images)}", "Automatic analysis", "images with cached full results"),
+            (f"{manual_total} / 400", "Manual 5×5", "operator measurements recorded"),
+            (_calibration_summary(comparisons), "Calibration", "median pixel size across images"),
+        ]
+    )
+    body = section("1. Dataset overview", overview_cards + note(
+        "Dataset conclusions aggregate image-level metrics; local samples are not pooled "
+        "across images into a single inferential claim."
+    ))
+
+    # TOC + per-image navigation
+    image_links = "".join(
+        f"<a href='#image-{index + 1:02d}'>{index + 1:02d}</a>"
+        for index in range(len(comparisons))
+    )
+    toc_items = "".join(
+        f"<li><a href='#s-{index}'>{heading}</a></li>"
+        for index, heading in enumerate(
+            (
+                "Dataset overview", "Dataset method summary", "Oriented Ribbon dataset behavior",
+                "Dataset figures", "Quality overview", "Manual 5×5", "Methods", "Images",
+                "Provenance", "Limitations",
+            )
+        )
+    )
+    body += f"<section id='s-0'><div class='toc'><ol>{toc_items}</ol></div></section>"
+    body += f"<section><h3>Per-image navigation</h3><div class='image-nav'>{image_links}</div></section>"
+
+    body += section("2. Dataset method summary", _dataset_method_summary(comparisons))
+    body += section("3. Oriented Ribbon dataset behavior", _dataset_ribbon_section(metrics, comparisons))
+    body += section(
+        "4. Dataset figures",
+        figure_block("dataset-figure-A.png", "Per-image method medians", "Median diameter per method by image.")
+        + figure_block("dataset-figure-B.png", "Raw EDT vs Ribbon EDT by image", "Refined-centerline effect on EDT medians.")
+        + figure_block("dataset-figure-C.png", "EDT↔Edge agreement", "Pairwise Wasserstein-1 raw vs Ribbon by image.")
+        + figure_block("dataset-figure-D.png", "Center shifts", "Observed vs residual median center shift by image.")
+        + figure_block("dataset-figure-E.png", "Asymmetry", "Median paired-edge asymmetry raw vs refined by image.")
+        + figure_block("dataset-figure-F.png", "Ribbon coverage", "Supported refined-centerline coverage per image."),
+    )
+    body += section("5. Quality overview", _dataset_quality(comparisons))
+    body += section("6. Manual 5×5", _final_manual_section(manual_store, dataset))
+    body += section("7. Methods", _methods_cards_dataset())
+    body += section("8. Images", _dataset_image_sections(output, comparisons, dataset, manual_store))
+    body += section("9. Provenance", _final_provenance(dataset, repo, cache))
+    body += section("10. Limitations", _dataset_limitations())
+
+    index = output / "index.html"
+    index.write_text(page("Fathom Fibers — Dataset Scientific Report", head_html=head, body_html=body), encoding="utf-8")
+    return index
+
+
+def _calibration_summary(comparisons: list[Any]) -> str:
+    sizes = []
+    sources = set()
+    for comparison in comparisons:
+        result = next(iter(comparison.results), None)
+        if result is not None and result.calibration is not None:
+            calibration = result.calibration
+            pixel_size = calibration.get("pixel_size_x_m") if isinstance(calibration, dict) else getattr(calibration, "pixel_size_x_m", None)
+            source = calibration.get("source") if isinstance(calibration, dict) else getattr(calibration, "source", None)
+            if pixel_size is not None:
+                sizes.append(float(pixel_size))
+                sources.add(str(source or "unknown"))
+    if not sizes:
+        return "—"
+    median = float(np.median(sizes)) * 1e9
+    return f"{median:.5g} nm/px ({' / '.join(sorted(sources))})"
+
+
+def _dataset_method_summary(comparisons: list[Any]) -> str:
+    from .report_style import table
+
+    estimators = (
+        ("PYTHON_SIMPOLY", "Python SIMPoly", "common"),
+        ("FATHOM_LOCAL", "Fathom Local", "common"),
+        ("FATHOM_FIELD_GRAPH_V1", "Raw EDT", "common"),
+        ("FATHOM_FIELD_GRAPH_V1", "Raw Edge", "secondary__FATHOM_FIELD_PAIRED_EDGE_DIAMETER"),
+        ("FATHOM_FIELD_GRAPH_V1", "Raw Profile", "secondary__FATHOM_FIELD_PROFILE_DIAMETER"),
+        ("FATHOM_FIELD_GRAPH_V1", "Ribbon EDT", "secondary__FATHOM_FIELD_REFINED_EDT_DIAMETER"),
+        ("FATHOM_FIELD_GRAPH_V1", "Ribbon Edge", "secondary__FATHOM_FIELD_REFINED_EDGE_DIAMETER"),
+        ("FATHOM_FIELD_GRAPH_V1", "Ribbon Profile", "secondary__FATHOM_FIELD_REFINED_PROFILE_DIAMETER"),
+    )
+    rows: list[list[Any]] = []
+    for method_id, label, source in estimators:
+        medians: list[float] = []
+        coverage_values: list[float] = []
+        available = 0
+        for comparison in comparisons:
+            result = next((r for r in comparison.results if r.method_id.value == method_id), None)
+            if result is None:
+                continue
+            if source == "common":
+                distribution = result.common_distribution
+            elif source.startswith("secondary__"):
+                distribution = result.secondary_distributions.get(source[len("secondary__"):])
+            else:
+                distribution = None
+            if distribution is None or distribution.diameter.size == 0:
+                continue
+            available += 1
+            medians.append(float(np.median(distribution.diameter)))
+            if result.method_id == MethodId.FATHOM_FIELD_GRAPH_V1:
+                field_coverage = result.native_statistics.get("smooth_coverage_fraction") if "REFINED" in source else None
+                if field_coverage is not None:
+                    coverage_values.append(float(field_coverage))
+        if not medians:
+            rows.append([label, "0", "—", "—", "—", "—"])
+            continue
+        median = float(np.median(medians))
+        iqr = float(np.quantile(medians, 0.75) - np.quantile(medians, 0.25))
+        rows.append(
+            [
+                label,
+                str(available),
+                _fmt(median),
+                _fmt(iqr),
+                _fmt(float(np.median(coverage_values))) if coverage_values else "—",
+                "COMPLETE" if available else "NOT_RUN",
+            ]
+        )
+    return table(
+        ["Estimator", "Images available", "Median of image medians (µm)", "IQR across image medians", "Median coverage", "Status"],
+        rows,
+    ) + "<p>Summary across images — not a pooled fiber distribution.</p>"
+
+
+def _dataset_ribbon_section(metrics: dict[str, Any], comparisons: list[Any]) -> str:
+    from .report_style import cards, note
+
+    w1_raw = metrics["w1_edt_edge_raw"]
+    w1_refined = metrics["w1_edt_edge_refined"]
+    shifts_observed: list[float] = []
+    shifts_residual: list[float] = []
+    asymmetry_raw: list[float] = []
+    asymmetry_refined: list[float] = []
+    coverage: list[float] = []
     for comparison in comparisons:
         field = next(r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1)
         values = _per_image_estimator_medians(field)
-        matlab = next(
-            (r for r in comparison.results if r.method_id == MethodId.MATLAB_SIMPOLY), None
-        )
-        python = next(
-            (r for r in comparison.results if r.method_id == MethodId.PYTHON_SIMPOLY), None
-        )
-        local = next(
-            (r for r in comparison.results if r.method_id == MethodId.FATHOM_LOCAL), None
-        )
-        manual = next(
-            (r for r in comparison.results if r.method_id == MethodId.MANUAL_5X5_REFERENCE), None
-        )
-        stem = Path(comparison.image_id).stem
-        manual_median = None
-        if manual is not None and manual.native_distribution is not None:
-            manual_median = float(np.median(manual.native_distribution.diameter))
-        per_image_rows += (
-            "<tr><td>" + html.escape(stem) + "</td>"
-            "<td>" + _fmt(matlab.native_result if matlab is not None else None) + "</td>"
-            "<td>" + _fmt(_distribution_median(python.common_distribution) if python is not None else None) + "</td>"
-            "<td>" + _fmt(_distribution_median(local.common_distribution) if local is not None else None) + "</td>"
-            "<td>" + _fmt(values["edt_raw"]) + "</td>"
-            "<td>" + _fmt(values["edt_refined"]) + "</td>"
-            "<td>" + _fmt(values["edge_raw"]) + "</td>"
-            "<td>" + _fmt(values["edge_refined"]) + "</td>"
-            "<td>" + _fmt(values["profile_raw"]) + "</td>"
-            "<td>" + _fmt(values["profile_refined"]) + "</td>"
-            "<td>" + _fmt(manual_median) + "</td>"
-            "<td>" + _fmt(values["smooth_coverage"], 4) + "</td></tr>"
-        )
-        _final_per_image_figures(output, comparison, stem)
-
-    per_image_figure_links = ""
-    for comparison in comparisons:
-        stem = Path(comparison.image_id).stem
-        escaped = html.escape(stem)
-        per_image_figure_links += (
-            f"<h3>{escaped}</h3>"
-            f"<img src='images/{escaped}/figure-A-histogram.png' alt='{escaped} histogram'><br>"
-            f"<img src='images/{escaped}/figure-B-ecdf.png' alt='{escaped} ECDF'><br>"
-            f"<img src='images/{escaped}/figure-C-field-ribbon.png' alt='{escaped} field raw vs ribbon'><br>"
-        )
-
-    manual_section = _final_manual_section(manual_store, dataset)
-    ribbon_box = _final_ribbon_box(metrics)
-    provenance = _final_provenance(dataset, repo, cache)
-
-    index = output / "index.html"
-    index.write_text(
-        f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Fathom Fibers — Scientific Morphological Fiber Analysis</title>
-<style>body{{font:14px system-ui,sans-serif;margin:2rem;color:#20242a;max-width:1200px}}
-table{{border-collapse:collapse;width:100%;margin:1rem 0}}th,td{{border:1px solid #ccd2d8;padding:.35rem;text-align:right}}
-th:first-child,td:first-child{{text-align:left}}th{{background:#eef1f4}}img{{max-width:100%;border:1px solid #c8cdd4}}
-h1{{font-size:1.6rem}}h2{{border-bottom:1px solid #d4d9df;padding-bottom:.2rem;margin-top:2rem}}
-.resultbox{{border-left:4px solid #2f9e63;background:#f0faf4;padding:1rem}}
-.notebox{{border-left:4px solid #b7791f;background:#fff9e6;padding:.7rem}}</style></head><body>
-<h1>Fathom Fibers — Scientific Morphological Fiber Analysis</h1>
-<p>Generated {datetime.now(UTC).isoformat()} from cached MethodResult payloads (schema {WorkspaceCache.FULL_SCHEMA}). No MATLAB execution; no algorithm was rerun for this report.</p>
-{ribbon_box}
-<h2>1. Dataset</h2>
-<p>Dataset <code>{html.escape(str(dataset.dataset_id))}</code> — {len(dataset.images)} images, {len(comparisons)} represented in the current caches.</p>
-<h2>2. Calibration / acquisition</h2>
-<p>Calibration is read from the embedded Zeiss SEM metadata; no uniform assumption is made. See provenance below.</p>
-<h2>3. Methods</h2>
-<table><tr><th>Method</th><th>Description</th><th>Status</th></tr>
-<tr><td>MATLAB SIMPoly</td><td>Native MATLAB implementation consumed from the validated oracle cache; native Gaussian center b1 reported.</td><td>COMPLETE (cache)</td></tr>
-<tr><td>Python SIMPoly</td><td>Python port of SIMPoly; calibrated length-weighted diameters on the skeleton. Documented divergence: bwskel.</td><td>COMPLETE</td></tr>
-<tr><td>Fathom Local</td><td>Assisted-ROI candidate cross-section metrology.</td><td>COMPLETE</td></tr>
-<tr><td>Fathom Field (Raw)</td><td>Structure-tensor orientation, anisotropic EDT and paired-edge / intensity-profile widths on the skeleton centerline.</td><td>EXPERIMENTAL_FIELD_MEASURING</td></tr>
-<tr><td>Fathom Oriented Ribbon V1</td><td>Pairs opposite mask boundaries, forms geometric midpoints, fits a confidence-weighted smooth centerline on non-branching runs and re-measures EDT / paired-edge / profile along it. Real SEM results represent method behavior and agreement, not known absolute accuracy.</td><td>EXPERIMENTAL</td></tr>
-<tr><td>Manual 5×5</td><td>Operator reference grid (25 positions per image). Sparse human reference; not ground truth.</td><td>{'INCOMPLETE' if (manual_store is None or manual_store.total_measured < 25) else 'COMPLETE'}</td></tr>
-</table>
-<h2>4. Per-image results (median µm)</h2>
-<table><tr><th>Image</th><th>MATLAB b1</th><th>Python</th><th>Local</th><th>Raw EDT</th><th>Ribbon EDT</th><th>Raw Edge</th><th>Ribbon Edge</th><th>Raw Profile</th><th>Ribbon Profile</th><th>Manual</th><th>Ribbon cov</th></tr>{per_image_rows}</table>
-<h2>5. Diameter distributions</h2>
-<p>Per-image Figure A (weighted density, shared physical bins), Figure B (ECDF) and Figure C (Fathom Field raw vs Ribbon) are rendered below.</p>
-<h2>6. Manual 5×5</h2>
-{manual_section}
-<h2>7. Fathom Field diagnostics</h2>
-<p>Orientation coherence, paired-edge acceptance, profile acceptance and asymmetry are reported per image in the quality section.</p>
-<h2>8. Oriented Ribbon refinement</h2>
-<p>Dataset figures A–E below show raw vs refined EDT/Edge medians, EDT\u2194Edge agreement, center shifts and coverage.</p>
-<h2>9. Method comparisons</h2>
-<p class="notebox">MATLAB SIMPoly native Gaussian center b1 is reported; a common distribution is unavailable from the current MATLAB cache and no histogram is fabricated. Python SIMPoly supplies compatible samples for distribution comparisons.</p>
-<h2>10. Quality / abstention</h2>
-<p>The Ribbon deliberately abstains on crossings, junctions, gaps and low-confidence regions; unsupported samples are not failures.</p>
-<h2>11. Provenance</h2>
-{provenance}
-<h2>12. Limitations</h2>
-<ul>
-<li>Measurements represent projected 2-D geometry; no 3-D claim.</li>
-<li>Fathom Field and Oriented Ribbon V1 are experimental; SEM results describe agreement, not known accuracy.</li>
-<li>Graph reconstruction, fiber instances and ML are not implemented.</li>
-<li>Manual 5×5 remains a sparse human reference.</li>
-</ul>
-<h2>Dataset figures</h2>
-<img src="dataset-figure-A.png" alt="raw vs refined medians"><br>
-<img src="dataset-figure-B.png" alt="W1 raw vs refined"><br>
-<img src="dataset-figure-C.png" alt="center shifts"><br>
-<img src="dataset-figure-D.png" alt="asymmetry"><br>
-<img src="dataset-figure-E.png" alt="coverage">
-<h2>Per-image figures</h2>
-{per_image_figure_links}
-</body></html>""",
-        encoding="utf-8",
+        for key, bucket in (
+            ("center_shift_median_um", shifts_observed),
+            ("residual_shift_median_um", shifts_residual),
+            ("asymmetry_raw", asymmetry_raw),
+            ("asymmetry_refined", asymmetry_refined),
+            ("smooth_coverage", coverage),
+        ):
+            value = values[key]
+            if value is not None:
+                bucket.append(float(value))
+    median = lambda values: float(np.median(values)) if values else None
+    improved = metrics["improved_count"]
+    cards_html = cards(
+        [
+            (f"{improved} / {len(comparisons)}", "Images with reduced EDT↔Edge W1", "after Ribbon refinement"),
+            (_fmt(median(w1_raw)) + " → " + _fmt(median(w1_refined)) + " µm", "Median W1 EDT↔Edge", "raw → Ribbon"),
+            (_fmt(median(shifts_observed)) + " → " + _fmt(median(shifts_residual)) + " µm", "Median center shift", "observed → residual"),
+            (_fmt(median(asymmetry_raw), 4) + " → " + _fmt(median(asymmetry_refined), 4), "Median asymmetry", "raw → refined"),
+            (_fmt(median(coverage), 4), "Median Ribbon coverage", "supported centerline"),
+        ]
     )
-    return index
+    return cards_html + note(
+        "Agreement changed/improved across images; this characterizes method agreement, "
+        "not known absolute accuracy on real SEM. <b>Oriented Ribbon V1 is EXPERIMENTAL</b>: "
+        "known-truth synthetic validation supports the centerline mechanism."
+    )
+
+
+def _dataset_quality(comparisons: list[Any]) -> str:
+    from .report_style import table
+
+    rows: list[list[Any]] = []
+    for comparison in comparisons:
+        field = next(r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1)
+        statistics = field.native_statistics
+        stem = Path(comparison.image_id).stem
+        rows.append(
+            [
+                stem,
+                _fmt(statistics.get("edge_acceptance_fraction"), 4),
+                _fmt(statistics.get("refined_edge_acceptance_fraction"), 4),
+                _fmt(statistics.get("profile_acceptance_fraction"), 4),
+                _fmt(statistics.get("refined_profile_acceptance_fraction"), 4),
+                _fmt(statistics.get("smooth_coverage_fraction"), 4),
+                ", ".join(field.quality_flags[:2]) or "—",
+            ]
+        )
+    return table(
+        ["Image", "Edge acc. raw", "Edge acc. refined", "Profile acc. raw", "Profile acc. refined", "Ribbon coverage", "Notable flags"],
+        rows,
+    ) + "<p>Ribbon coverage below 100% reflects intentional abstention (crossings, junctions, gaps, low-confidence regions).</p>"
+
+
+def _methods_cards_dataset() -> str:
+    from .report_style import cards
+
+    entries = [
+        ("MATLAB SIMPoly", "Reference/native implementation consumed from a validated cache; native Gaussian center b1 reported. Common sample distribution unavailable from the current cache.", "COMPLETE (cache)"),
+        ("Python SIMPoly", "Python source-compatible approximation; calibrated length-weighted diameters on the skeleton.", "COMPLETE"),
+        ("Fathom Local", "Independent local cross-section estimator; not truth and may show a broader distribution.", "COMPLETE"),
+        ("Fathom Field", "Structure-tensor orientation plus local boundary metrology (EDT / paired edge / intensity profile) on the sampled centerline.", "EXPERIMENTAL"),
+        ("Oriented Ribbon V1", "Experimental refined centerline from paired opposite boundaries and re-measurement of the Field estimators on supported segments.", "EXPERIMENTAL"),
+        ("Manual 5×5", "Sparse human reference grid; not ground truth.", "REFERENCE"),
+        ("Consensus", "Equal-method quantile pseudo-reference across participating methods; not ground truth. Field Raw/Ribbon are variants of one method and do not add independent votes.", "REFERENCE"),
+    ]
+    return cards([("", label, purpose + " · " + status) for label, purpose, status in entries])
+
+
+def _dataset_image_sections(output: Path, comparisons: list[Any], dataset: Any, manual_store: Any) -> str:
+    from .report_style import cards
+    from .report_style import figure as figure_block
+
+    body = ""
+    for index, comparison in enumerate(comparisons):
+        stem = Path(comparison.image_id).stem
+        image_dir = output / "images" / stem
+        image_dir.mkdir(parents=True, exist_ok=True)
+        _final_per_image_figures(image_dir, comparison, stem)
+        field = next(r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1)
+        values = _per_image_estimator_medians(field)
+        manual = manual_store.reviews.get(dataset.image_by_stem(stem).case_id) if manual_store is not None and dataset.image_by_stem(stem) is not None else None
+        manual_count = manual.measurement_count if manual is not None else 0
+        card_items = [
+            ("Ribbon EDT", _fmt(values["edt_refined"]) + " µm", "median"),
+            ("Ribbon Edge", _fmt(values["edge_refined"]) + " µm", "median"),
+            ("Ribbon Profile", _fmt(values["profile_refined"]) + " µm", "median"),
+            ("Coverage", _fmt(values["smooth_coverage"], 4), "supported centerline"),
+            ("Manual", f"{manual_count} / 25", "measurements"),
+        ]
+        body += f"<section id='image-{index + 1:02d}'>"
+        body += f"<h3>{stem}</h3>"
+        body += cards(card_items)
+        body += figure_block(f"images/{stem}/figure-A-primary-histogram.png", f"{stem} primary histogram", "Common diameter histogram, primary range.")
+        body += figure_block(f"images/{stem}/figure-B-ecdf.png", f"{stem} ECDF", "Diameter ECDF, full observed range.")
+        body += figure_block(f"images/{stem}/figure-C-field-ribbon.png", f"{stem} field raw vs Ribbon", "Field estimators raw vs Oriented Ribbon V1.")
+        body += "</section>"
+    return body
+
+
+def _dataset_limitations() -> str:
+    from .report_style import info
+
+    items = [
+        "Measurements represent projected 2-D geometry; no 3-D claim is made.",
+        "Agreement metrics and the consensus pseudo-reference are not ground truth.",
+        "Manual 5×5 is a sparse human reference; missing measurements are never filled in.",
+        "MATLAB SIMPoly reports the native b1 statistic; a common raw distribution is unavailable from the current cache.",
+        "Oriented Ribbon V1 is EXPERIMENTAL; real SEM comparisons characterize behavior and agreement, not known absolute accuracy.",
+        "Unsupported or crossing regions may be intentionally abstained rather than measured.",
+        "Fathom Local may show broad or right-tailed candidates depending on image geometry; quality flags provide context.",
+    ]
+    return info("<ul>" + "".join(f"<li>{item}</li>" for item in items) + "</ul>")
 
 
 def _distribution_median(distribution: Any) -> float | None:
@@ -1152,84 +2039,87 @@ def _distribution_median(distribution: Any) -> float | None:
 
 
 def _final_per_image_figures(output: Path, comparison: Any, stem: str) -> None:
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-    from matplotlib.figure import Figure
-
-    image_dir = output / "images" / stem
-    image_dir.mkdir(parents=True, exist_ok=True)
+    """Per-image figures: primary histogram, ECDF and raw-vs-Ribbon panels."""
     series = series_distributions(comparison)
     if not series:
         return
-    distributions = [item[1] for item in series]
-    edges = common_histogram_edges(distributions)
-    if not edges.size:
-        return
+    x_max = _primary_x_max(series)
+    figure_primary_histogram(series, output, x_max)
+    figure_ecdf_full(series, output)
+    figure_field_raw_vs_ribbon(comparison, output)
+    # normalize file names for the image sections
+    for old, new in (
+        ("figure-primary-histogram.png", "figure-A-primary-histogram.png"),
+        ("figure-full-ecdf.png", "figure-B-ecdf.png"),
+        ("figure-field-raw-vs-ribbon.png", "figure-C-field-ribbon.png"),
+    ):
+        source = output / old
+        if source.exists():
+            source.replace(output / new)
 
-    figure = Figure(figsize=(7, 4))
-    axis = figure.add_subplot(111)
-    centers = edges[:-1] + np.diff(edges) / 2.0
-    for name, distribution in series:
-        axis.plot(
-            centers,
-            _weighted_density(distribution, edges),
-            label=f"{name} (N={distribution.diameter.size})",
-            color=SERIES_COLORS.get(name),
-            drawstyle="steps-mid",
-        )
-    axis.set_xlabel("Diameter (µm)")
-    axis.set_ylabel("Weighted density (1/µm)")
-    axis.set_title(f"{stem} — common diameter histogram")
-    axis.legend(fontsize="small")
-    axis.grid(alpha=0.2)
-    figure.tight_layout()
-    FigureCanvasAgg(figure).print_figure(image_dir / "figure-A-histogram.png", dpi=120)
-    figure.clear()
 
-    figure = Figure(figsize=(7, 4))
-    axis = figure.add_subplot(111)
-    for name, distribution in series:
-        order = np.argsort(distribution.diameter, kind="stable")
-        x = distribution.diameter[order]
-        y = np.cumsum(distribution.weight[order]) / distribution.weight.sum()
-        axis.step(x, y, where="post", label=f"{name} (N={distribution.diameter.size})", color=SERIES_COLORS.get(name))
-    axis.set_xlabel("Diameter (µm)")
-    axis.set_ylabel("Cumulative weight")
-    axis.set_title(f"{stem} — ECDF")
-    axis.legend(fontsize="small")
-    axis.grid(alpha=0.2)
-    figure.tight_layout()
-    FigureCanvasAgg(figure).print_figure(image_dir / "figure-B-ecdf.png", dpi=120)
-    figure.clear()
+def _final_manual_section(manual_store: Any, dataset: Any) -> str:
+    from .report_style import note
 
-    ribbon = [item for item in series if item[0].startswith("Ribbon")]
-    raw_field = [
-        item for item in series
-        if item[0] in {"Fathom Field (EDT)", "Field Paired Edge", "Field Intensity Profile"}
+    if manual_store is None:
+        return "<p>Manual 5×5 store not loaded.</p>"
+    total = manual_store.total_measured
+    rows = ""
+    for image in dataset.images:
+        review = manual_store.reviews.get(image.case_id)
+        count = review.measurement_count if review is not None else 0
+        rows += f"<tr><td>{html.escape(image.filename)}</td><td>{count} / 25</td></tr>"
+    status = "COMPLETE REFERENCE" if total >= 400 else "INCOMPLETE REFERENCE"
+    return (
+        f"<p>Measurements recorded: <b>{total} / 400</b> — {status}.</p>"
+        "<table><tr><th>Image</th><th>Progress</th></tr>" + rows + "</table>"
+    ) + note(
+        "The report is generated regardless of manual completeness; missing manual "
+        "values are never filled in. Manual 5×5 is a sparse human reference, not ground truth."
+    )
+
+
+def _final_ribbon_box(metrics: dict[str, Any]) -> str:
+    import statistics
+
+    w1_raw = metrics["w1_edt_edge_raw"]
+    w1_refined = metrics["w1_edt_edge_refined"]
+    if not w1_raw:
+        return "<div class='info'><b>Oriented Ribbon V1:</b> no comparable distributions.</div>"
+    return (
+        f"<div class='info'><b>Oriented Ribbon V1 (experimental):</b> "
+        f"{metrics['improved_count']}/{metrics['total']} images show "
+        "W1(refined EDT ↔ refined Edge) &lt; W1(raw EDT ↔ raw Edge); "
+        f"dataset median W1 {statistics.median(w1_raw):.3f} → {statistics.median(w1_refined):.3f} µm.</div>"
+    )
+
+
+def _final_provenance(dataset: Any, repo: Path, cache: WorkspaceCache) -> str:
+    from .report_style import details, table
+
+    try:
+        import subprocess
+
+        commit = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=False,
+        ).stdout.strip()[:12]
+    except Exception:
+        commit = "unknown"
+    rows = [
+        ["Application", "Fathom Fibers"],
+        ["Commit", commit],
+        ["Cache schema", cache.FULL_SCHEMA],
+        ["Dataset", str(dataset.dataset_id)],
+        ["MATLAB cache", "validated controlled-origin cache; native b1 only"],
     ]
-    if ribbon:
-        figure = Figure(figsize=(7, 4))
-        axis = figure.add_subplot(111)
-        all_field = raw_field + ribbon
-        field_distributions = [item[1] for item in all_field]
-        field_edges = common_histogram_edges(field_distributions)
-        if field_edges.size:
-            centers = field_edges[:-1] + np.diff(field_edges) / 2.0
-            for name, distribution in all_field:
-                axis.plot(
-                    centers,
-                    _weighted_density(distribution, field_edges),
-                    label=f"{name} (N={distribution.diameter.size})",
-                    color=SERIES_COLORS.get(name),
-                    drawstyle="steps-mid",
-                )
-        axis.set_xlabel("Diameter (µm)")
-        axis.set_ylabel("Weighted density (1/µm)")
-        axis.set_title(f"{stem} — Fathom Field raw vs Ribbon")
-        axis.legend(fontsize="small")
-        axis.grid(alpha=0.2)
-        figure.tight_layout()
-        FigureCanvasAgg(figure).print_figure(image_dir / "figure-C-field-ribbon.png", dpi=120)
-        figure.clear()
+    hashes = {
+        image.case_id: image.sha256[:12] if image.sha256 else "—"
+        for image in dataset.images
+    }
+    for case_id, short_hash in list(hashes.items())[:4]:
+        rows.append([f"Image hash {case_id}", short_hash])
+    return details("Provenance / Reproducibility", table(["Item", "Value"], rows))
 
 
 def _final_manual_section(manual_store: Any, dataset: Any) -> str:
