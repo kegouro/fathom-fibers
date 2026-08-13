@@ -348,5 +348,5 @@ def test_export_bundle_writes_required_files(qtbot, tmp_path):
     summary = (root / "results/dataset_summary.csv").read_text()
     assert "Refined EDT" in summary
     provenance = json.loads((root / "results/provenance.json").read_text())
-    assert provenance["version"] == "0.2.0-experimental"
+    assert provenance["version"] == "0.2.0rc1"
     assert "git_commit" in provenance
