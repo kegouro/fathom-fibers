@@ -11,6 +11,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QSortFilterProxyModel,
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import QColor
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTableView,
     QTableWidget,
@@ -67,6 +69,7 @@ class DatasetPanel(QWidget):
     imageRequested = Signal(int)
     openRequested = Signal()
     runRequested = Signal(str)
+    exploreRequested = Signal()
 
     STATUS_TEXT = (
         ("complete", "complete"),
@@ -81,6 +84,18 @@ class DatasetPanel(QWidget):
         super().__init__(parent)
         self.dataset = None
         self.controller: WorkspaceController | None = None
+        self.header_title = QLabel("")
+        self.header_title.setProperty("role", "title")
+        self.header_subtitle = QLabel("")
+        self.header_subtitle.setProperty("role", "caption")
+        self.header_subtitle.setWordWrap(True)
+        self.cta_button = QPushButton("")
+        self.cta_button.setProperty("role", "primary")
+        header = QVBoxLayout()
+        header.setSpacing(4)
+        header.addWidget(self.header_title)
+        header.addWidget(self.header_subtitle)
+        header.addWidget(self.cta_button)
         self.tree = QTreeWidget()
         self.tree.setColumnCount(2)
         self.tree.setHeaderLabels(["Image", "Status"])
@@ -95,12 +110,14 @@ class DatasetPanel(QWidget):
         buttons.addWidget(self.run_missing_button)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
+        layout.addLayout(header)
         layout.addWidget(self.tree, 1)
         layout.addLayout(buttons)
         self.tree.currentItemChanged.connect(self._current_changed)
         self.open_button.clicked.connect(self.openRequested)
         self.run_all_button.clicked.connect(lambda: self.runRequested.emit("all"))
         self.run_missing_button.clicked.connect(lambda: self.runRequested.emit("missing"))
+        self.cta_button.clicked.connect(self._cta_clicked)
 
     def set_controller(self, controller: WorkspaceController) -> None:
         self.controller = controller
@@ -110,11 +127,40 @@ class DatasetPanel(QWidget):
         if current is not None and current.data(0, Qt.ItemDataRole.UserRole) is not None:
             self.imageRequested.emit(int(current.data(0, Qt.ItemDataRole.UserRole)))
 
+    def _cta_clicked(self) -> None:
+        if self.controller is None or self.controller.dataset is None:
+            self.openRequested.emit()
+            return
+        if self._all_complete():
+            self.exploreRequested.emit()
+        else:
+            self.runRequested.emit("missing")
+
+    def _all_complete(self) -> bool:
+        if self.controller is None or self.controller.dataset is None:
+            return False
+        return all(
+            self.controller.cache.has_full(image.stem)
+            for image in self.controller.dataset.images
+        )
+
     def refresh(self) -> None:
         self.tree.clear()
         if self.controller is None or self.controller.dataset is None:
+            self.header_title.setText("")
+            self.header_subtitle.setText("")
+            self.cta_button.setText("Open Dataset…")
             return
         dataset = self.controller.dataset
+        complete = sum(1 for image in dataset.images if self.controller.cache.has_full(image.stem))
+        self.header_title.setText(dataset.dataset_id)
+        self.header_subtitle.setText(
+            f"{len(dataset.images)} images · analysis available {complete} / {len(dataset.images)}"
+        )
+        if complete == len(dataset.images):
+            self.cta_button.setText("Explore Results")
+        else:
+            self.cta_button.setText("Analyze Dataset")
         root = QTreeWidgetItem([dataset.dataset_id])
         self.tree.addTopLevelItem(root)
         for index, image in enumerate(dataset.images):
@@ -208,16 +254,28 @@ class OverlayPanel(QWidget):
         field = results.get(MethodId.FATHOM_FIELD_GRAPH_V1)
         python = results.get(MethodId.PYTHON_SIMPOLY)
         local = results.get(MethodId.FATHOM_LOCAL)
-        self.checks["skeleton"].setEnabled(python is not None and python.centerline is not None)
-        self.checks["mask"].setEnabled(python is not None and python.mask is not None)
-        for key in ("centerline", "raw_centerline", "orientation", "edges", "profile", "rejected"):
-            self.checks[key].setEnabled(field is not None)
-        refined_available = field is not None and "refined_mask" in field.local_samples
-        for key in ("refined_centerline", "midpoints", "refined_edges", "rejected_refined"):
-            self.checks[key].setEnabled(refined_available)
-        self.checks["local_sections"].setEnabled(
-            local is not None and local.local_samples is not None
-        )
+        availability = {
+            "skeleton": python is not None and python.centerline is not None,
+            "mask": python is not None and python.mask is not None,
+            "centerline": field is not None,
+            "raw_centerline": field is not None,
+            "orientation": field is not None,
+            "edges": field is not None,
+            "profile": field is not None,
+            "rejected": field is not None,
+            "refined_centerline": field is not None and "refined_mask" in field.local_samples,
+            "midpoints": field is not None and "refined_mask" in field.local_samples,
+            "refined_edges": field is not None and "refined_mask" in field.local_samples,
+            "rejected_refined": field is not None and "refined_mask" in field.local_samples,
+            "local_sections": local is not None and local.local_samples is not None,
+            "manual": True,
+        }
+        for key, available in availability.items():
+            check = self.checks.get(key)
+            if check is None:
+                continue
+            check.setEnabled(available)
+            check.setVisible(available)
         missing = []
         if python is None or python.centerline is None:
             missing.append("SIMPoly")
@@ -940,6 +998,12 @@ class Manual5x5Panel(QWidget):
         self.active_cell: tuple[int, int] | None = None
         self.position = QLabel("No dataset loaded")
         self.progress = QLabel("")
+        self.feedback_label = QLabel("")
+        self.feedback_label.setProperty("role", "success")
+        self._feedback_timer = QTimer(self)
+        self._feedback_timer.setSingleShot(True)
+        self._feedback_timer.setInterval(2200)
+        self._feedback_timer.timeout.connect(lambda: self.feedback_label.setText(""))
         self.grid = QTableWidget(5, 5)
         self.grid.setHorizontalHeaderLabels([str(index) for index in range(1, 6)])
         self.grid.setVerticalHeaderLabels([str(index) for index in range(1, 6)])
@@ -976,6 +1040,7 @@ class Manual5x5Panel(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addWidget(self.position)
         layout.addWidget(self.progress)
+        layout.addWidget(self.feedback_label)
         layout.addWidget(self.grid, 1)
         layout.addLayout(buttons)
         layout.addWidget(help_text)
@@ -1102,6 +1167,10 @@ class Manual5x5Panel(QWidget):
             int(getattr(self, "_image_index", 1)), int(getattr(self, "_image_count", 1)),
             int(getattr(self, "_dataset_total", 0)),
         )
+
+    def flash_feedback(self, text: str) -> None:
+        self.feedback_label.setText(text)
+        self._feedback_timer.start()
 
     def set_image_index(self, index: int, count: int, dataset_total: int) -> None:
         self._image_index = index
@@ -1505,3 +1574,243 @@ class RunMethodsDialog(QDialog):
     def _choose(self, button: str) -> None:
         self.current_button = button
         self.accept()
+
+
+class ImageSummaryPanel(QWidget):
+    """Compact current-image summary shown when nothing is selected."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.image_label = QLabel("No image")
+        self.image_label.setProperty("role", "title")
+        self.metadata_label = QLabel("—")
+        self.metadata_label.setProperty("role", "caption")
+        self.metadata_label.setWordWrap(True)
+        self.median_label = QLabel("—")
+        self.median_label.setProperty("role", "primary")
+        self.median_caption = QLabel("median diameter")
+        self.median_caption.setProperty("role", "caption")
+        self.stat_table = QTableWidget(0, 2)
+        self.stat_table.setHorizontalHeaderLabels(["Field estimator", "Median (µm)"])
+        self.stat_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.stat_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.stat_table.setMaximumHeight(190)
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        self.status_label.setProperty("role", "muted")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        layout.addWidget(self.image_label)
+        layout.addWidget(self.metadata_label)
+        layout.addWidget(self.median_caption)
+        layout.addWidget(self.median_label)
+        layout.addWidget(self.stat_table)
+        layout.addWidget(self.status_label)
+        layout.addStretch(1)
+
+    def set_image(self, image: Any, comparison: Any = None) -> None:
+        if image is None:
+            self.image_label.setText("No image")
+            self.metadata_label.setText("Open a dataset to begin.")
+            self.median_label.setText("—")
+            self.status_label.setText("")
+            self.stat_table.setRowCount(0)
+            return
+        calibration = image.calibration
+        self.image_label.setText(image.image_id)
+        self.metadata_label.setText(
+            f"{calibration.pixel_size_x_m * 1e9:.5g} × {calibration.pixel_size_y_m * 1e9:.5g} nm/px · "
+            f"{calibration.source}"
+        )
+        if comparison is None:
+            self.median_label.setText("—")
+            self.stat_table.setRowCount(0)
+            self.status_label.setText("No cached results for this image yet.")
+            return
+        field = next(
+            (
+                result
+                for result in comparison.results
+                if result.method_id == MethodId.FATHOM_FIELD_GRAPH_V1
+            ),
+            None,
+        )
+        rows: list[tuple[str, str]] = []
+        if field is not None:
+            for name, key in (
+                ("Raw EDT", "diameter_um"),
+                ("Raw Edge", "edge_diameter_um"),
+                ("Ribbon EDT", "refined_edt_um"),
+                ("Ribbon Edge", "refined_edge_um"),
+                ("Ribbon Profile", "refined_profile_um"),
+            ):
+                values = field.local_samples.get(key)
+                median = (
+                    float(np.nanmedian(np.asarray(values)))
+                    if values is not None and np.asarray(values).size
+                    else None
+                )
+                rows.append((name, _fmt(median)))
+            self.stat_table.setRowCount(len(rows))
+            for row_index, (name, value) in enumerate(rows):
+                self.stat_table.setItem(row_index, 0, QTableWidgetItem(name))
+                self.stat_table.setItem(row_index, 1, QTableWidgetItem(value))
+            statistics = field.native_statistics
+            self.status_label.setText(
+                f"Supported centerline coverage: {_frac(statistics.get('smooth_coverage_fraction'))} · "
+                f"edge acceptance {_frac(statistics.get('edge_acceptance_fraction'))} → "
+                f"{_frac(statistics.get('refined_edge_acceptance_fraction'))}"
+            )
+            median = float(np.nanmedian(field.local_samples["refined_edge_um"])) if np.any(field.local_samples["refined_edge_accepted"]) else None
+            self.median_label.setText(_fmt(median))
+            self.median_caption.setText("median Ribbon edge diameter (µm)")
+        else:
+            self.stat_table.setRowCount(0)
+            self.status_label.setText("Field results not available.")
+
+
+class ReportHeaderPanel(QWidget):
+    """Focused report/export actions for the Report workspace."""
+
+    datasetReportRequested = Signal()
+    bundleExportRequested = Signal()
+    imageReportRequested = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        title = QLabel("SCIENTIFIC REPORT")
+        title.setProperty("role", "section")
+        subtitle = QLabel("Generate the deliverable HTML report and export results for the dataset.")
+        subtitle.setProperty("role", "caption")
+        subtitle.setWordWrap(True)
+        self.dataset_button = QPushButton("Generate Dataset Scientific Report")
+        self.dataset_button.setProperty("role", "primary")
+        self.bundle_button = QPushButton("Export Analysis Bundle")
+        self.image_button = QPushButton("Current Image Report")
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.dataset_button)
+        buttons.addWidget(self.bundle_button)
+        buttons.addWidget(self.image_button)
+        buttons.addStretch(1)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addLayout(buttons)
+        self.dataset_button.clicked.connect(self.datasetReportRequested)
+        self.bundle_button.clicked.connect(self.bundleExportRequested)
+        self.image_button.clicked.connect(self.imageReportRequested)
+
+
+class MethodsOverviewDialog(QDialog):
+    """Structured methods overview: name, purpose, status, detailed info."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("About methods")
+        self.setMinimumSize(640, 520)
+        self._details: dict[str, str] = {}
+        layout = QVBoxLayout(self)
+        title = QLabel("Fathom Fibers — measurement methods")
+        title.setProperty("role", "title")
+        layout.addWidget(title)
+        self.list = QTableWidget(0, 3)
+        self.list.setHorizontalHeaderLabels(["Method", "Purpose", "Status"])
+        self.list.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.list.cellDoubleClicked.connect(self._show_details)
+        layout.addWidget(self.list, 1)
+        info = QLabel(
+            "Double-click a row for the full scientific description, including caveats."
+        )
+        info.setProperty("role", "caption")
+        layout.addWidget(info)
+        self._populate()
+
+    def _populate(self) -> None:
+        entries = [
+            (
+                "MATLAB SIMPoly",
+                "Native MATLAB SIMPoly consumed from the validated oracle cache.",
+                "COMPLETE (cache)",
+                (
+                    "<p>Native Gaussian center b1 reported. The common distribution is unavailable "
+                    "from the current cache; no histogram is fabricated.</p>"
+                ),
+            ),
+            (
+                "Python SIMPoly",
+                "Python port of SIMPoly: calibrated length-weighted diameters on the skeleton.",
+                "PARTIAL",
+                ("<p>Known limitation: KNOWN_LIBRARY_DIVERGENCE — bwskel.</p>"),
+            ),
+            (
+                "Fathom Local",
+                "Assisted-ROI candidate cross-section metrology.",
+                "COMPLETE",
+                (
+                    "<p>Local fiber candidates with proposed cross-sections; automatic results "
+                    "require review.</p>"
+                ),
+            ),
+            (
+                "Fathom Field",
+                "Structure-tensor orientation, anisotropic EDT and paired boundary metrology.",
+                "EXPERIMENTAL",
+                (
+                    "<p><b>EDT</b> — Twice the physical distance from the sampled centerline to the "
+                    "nearest background boundary.<br>"
+                    "<b>Paired Edge</b> — Distance between both local mask boundaries measured along "
+                    "the local fiber normal.<br>"
+                    "<b>Intensity Profile</b> — Paired-edge width refined against local subpixel "
+                    "gradient transitions in the raw SEM image.<br>"
+                    "No estimator is called best. Graph reconstruction and fiber instances are not "
+                    "implemented.</p>"
+                ),
+            ),
+            (
+                "Oriented Ribbon V1",
+                "Experimental refined centerline from paired opposite boundaries.",
+                "EXPERIMENTAL",
+                (
+                    "<p><b>EXPERIMENTAL</b> — geometric centerline refinement from paired opposite "
+                    "boundaries: local midpoints, a confidence-weighted smooth centerline on "
+                    "non-branching runs, then re-measurement of EDT, paired-edge and profile along "
+                    "it. Validated on known-truth synthetic geometry; real SEM results represent "
+                    "method behavior/agreement, not known absolute accuracy.</p>"
+                ),
+            ),
+            (
+                "Manual 5×5",
+                "Operator reference grid: 25 perpendicular width measurements per image.",
+                "REFERENCE",
+                (
+                    "<p>Sparse human reference; never ground truth. Missing measurements are never "
+                    "filled in.</p>"
+                ),
+            ),
+            (
+                "Consensus",
+                "Equal-method quantile pseudo-reference across participating methods.",
+                "REFERENCE",
+                ("<p>Not ground truth. Field estimator variants do not add independent votes.</p>"),
+            ),
+        ]
+        self.list.setRowCount(len(entries))
+        for row_index, (name, purpose, status, details) in enumerate(entries):
+            self.list.setItem(row_index, 0, QTableWidgetItem(name))
+            self.list.setItem(row_index, 1, QTableWidgetItem(purpose))
+            status_item = QTableWidgetItem(status)
+            if status == "EXPERIMENTAL":
+                status_item.setForeground(QColor("#d99a2b"))
+            self.list.setItem(row_index, 2, status_item)
+            self._details[name] = details
+
+    def _show_details(self, row: int, _column: int) -> None:
+        name = self.list.item(row, 0).text()
+        details = self._details.get(name, "")
+        QMessageBox.information(self, name, details)

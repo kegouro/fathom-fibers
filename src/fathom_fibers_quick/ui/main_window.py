@@ -3,9 +3,9 @@ from __future__ import annotations
 import copy
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
-from PySide6.QtCore import QRectF, Qt, QThreadPool, QTimer
+from PySide6.QtCore import QRectF, QSettings, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -16,9 +16,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QSlider,
+    QStackedWidget,
     QTabWidget,
     QToolBar,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -48,11 +51,14 @@ from .widgets.panels import HistoryPanel
 from .widgets.workspace_panels import (
     DatasetPanel,
     DistributionsPanel,
+    ImageSummaryPanel,
     Manual5x5Panel,
     MeasurementsPanel,
+    MethodsOverviewDialog,
     MethodsPanel,
     OverlayPanel,
     QualityPanel,
+    ReportHeaderPanel,
     RunMethodsDialog,
     SummaryPanel,
     WorkspaceInspector,
@@ -90,12 +96,17 @@ class MainWindow(QMainWindow):
         self._field_sample_index: int | None = None
         self._field_position: QRectF | None = None
         self._overlay_state: set[str] = set(OVERLAY_DEFAULTS)
+        self._mode = "analyze"
         self.setWindowTitle("Fathom Fibers")
         self.resize(1500, 920)
         self.setMinimumSize(1050, 680)
 
         self.viewer = ScientificImageView()
-        self.setCentralWidget(self.viewer)
+        self.landing = self._build_landing()
+        self.central_stack = QStackedWidget()
+        self.central_stack.addWidget(self.landing)
+        self.central_stack.addWidget(self.viewer)
+        self.setCentralWidget(self.central_stack)
         self.workspace = workspace_controller or WorkspaceController(self.session, self)
         self.overlay_layers = OverlayLayers(self.viewer)
         self.viewer.set_scientific_overlays(self.overlay_layers)
@@ -117,6 +128,8 @@ class MainWindow(QMainWindow):
         self.measurements_panel = MeasurementsPanel(self.session)
         self.quality_panel = QualityPanel()
         self.manual_panel = Manual5x5Panel()
+        self.image_summary_panel = ImageSummaryPanel()
+        self.report_header = ReportHeaderPanel()
 
         self._build_docks()
         self._build_actions()
@@ -126,6 +139,8 @@ class MainWindow(QMainWindow):
         self._wire_workspace()
         self._start_autosave_timer()
         self._refresh_all()
+        self._restore_window_state()
+        self._update_landing()
         campaign_manifest = Path.cwd() / ".validation/real-tiff-campaign/dataset_manifest.json"
         if campaign_manifest.exists():
             try:
@@ -139,29 +154,30 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ docks
 
     def _build_docks(self) -> None:
-        project_dock = QDockWidget("PROJECT", self)
-        project_dock.setObjectName("projectDock")
-        project_dock.setWidget(self.project_panel)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, project_dock)
+        self.project_dock = QDockWidget("PROJECT", self)
+        self.project_dock.setObjectName("projectDock")
+        self.project_dock.setWidget(self.project_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.project_dock)
 
-        dataset_dock = QDockWidget("DATASET", self)
-        dataset_dock.setObjectName("datasetDock")
-        dataset_dock.setWidget(self.dataset_panel)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dataset_dock)
+        self.dataset_dock = QDockWidget("DATASET", self)
+        self.dataset_dock.setObjectName("datasetDock")
+        self.dataset_dock.setWidget(self.dataset_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dataset_dock)
 
-        overlay_dock = QDockWidget("OVERLAYS", self)
-        overlay_dock.setObjectName("overlayDock")
-        overlay_dock.setWidget(self.overlay_panel)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, overlay_dock)
+        self.overlay_dock = QDockWidget("OVERLAYS", self)
+        self.overlay_dock.setObjectName("overlayDock")
+        self.overlay_dock.setWidget(self.overlay_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.overlay_dock)
 
-        inspector_tabs = QTabWidget()
-        inspector_tabs.addTab(self.inspector_panel, "Measurement")
-        inspector_tabs.addTab(self.workspace_inspector, "Workspace")
-        inspector_tabs.addTab(self._display_panel(), "Display")
-        inspector_dock = QDockWidget("INSPECTOR", self)
-        inspector_dock.setObjectName("inspectorDock")
-        inspector_dock.setWidget(inspector_tabs)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, inspector_dock)
+        self.inspector_tabs = QTabWidget()
+        self.inspector_tabs.addTab(self.image_summary_panel, "Image")
+        self.inspector_tabs.addTab(self.inspector_panel, "Measurement")
+        self.inspector_tabs.addTab(self.workspace_inspector, "Workspace")
+        self.inspector_tabs.addTab(self._display_panel(), "Display")
+        self.inspector_dock = QDockWidget("INSPECTOR", self)
+        self.inspector_dock.setObjectName("inspectorDock")
+        self.inspector_dock.setWidget(self.inspector_tabs)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_dock)
 
         self.bottom_tabs = QTabWidget()
         self.bottom_tabs.addTab(self.summary_panel, "SUMMARY")
@@ -175,11 +191,18 @@ class MainWindow(QMainWindow):
         self.bottom_tabs.addTab(self.analysis_panel, "ANALYSIS")
         self.bottom_tabs.addTab(self.comparison_panel, "COMPARE METHODS")
         self.bottom_tabs.addTab(self.batch_review_panel, "BATCH MEASUREMENT REVIEW")
-        bottom_dock = QDockWidget("RESULTS / HISTORY / ANALYSIS", self)
-        bottom_dock.setObjectName("resultsDock")
-        bottom_dock.setWidget(self.bottom_tabs)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, bottom_dock)
-        bottom_dock.setMinimumHeight(250)
+        bottom_container = QWidget()
+        bottom_layout = QVBoxLayout(bottom_container)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(0)
+        bottom_layout.addWidget(self.report_header)
+        bottom_layout.addWidget(self.bottom_tabs, 1)
+        self.bottom_dock = QDockWidget("RESULTS / HISTORY / ANALYSIS", self)
+        self.bottom_dock.setObjectName("resultsDock")
+        self.bottom_dock.setWidget(bottom_container)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.bottom_dock)
+        self.bottom_dock.setMinimumHeight(250)
+        self.report_header.setVisible(False)
 
     def _display_panel(self) -> QWidget:
         panel = QWidget()
@@ -256,6 +279,18 @@ class MainWindow(QMainWindow):
         self.export_dataset_action = self._action("Export dataset results…", self._export_dataset)
         self.export_bundle_action = self._action("Export Analysis Bundle…", self._export_bundle)
         self.methods_help_action = self._action("About methods…", self._methods_help)
+
+        self.mode_group = QActionGroup(self)
+        self.mode_group.setExclusive(True)
+        self.mode_actions = {
+            "analyze": self._action("Analyze", lambda: self.set_mode("analyze"), "A", checkable=True),
+            "manual": self._action("Manual", lambda: self.set_mode("manual"), "M", checkable=True),
+            "report": self._action("Report", lambda: self.set_mode("report"), "R", checkable=True),
+            "advanced": self._action("Advanced", lambda: self.set_mode("advanced"), checkable=True),
+        }
+        for action in self.mode_actions.values():
+            self.mode_group.addAction(action)
+        self.mode_actions["analyze"].setChecked(True)
 
         self.tool_group = QActionGroup(self)
         self.tool_group.setExclusive(True)
@@ -358,17 +393,28 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main", self)
         toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
-        toolbar.addActions(
-            (self.open_image_action, self.open_dataset_action, self.previous_image_action, self.next_image_action)
-        )
+        for key in ("analyze", "manual", "report", "advanced"):
+            toolbar.addAction(self.mode_actions[key])
         toolbar.addSeparator()
-        toolbar.addActions((self.fit_action, self.actual_action, self.zoom_in_action, self.zoom_out_action))
+        toolbar.addAction(self.open_dataset_action)
         toolbar.addSeparator()
-        toolbar.addActions((self.run_action, self.compare_action))
+        toolbar.addAction(self.previous_image_action)
+        self.image_position_label = QLabel("—")
+        self.image_position_label.setProperty("role", "caption")
+        self.image_position_label.setMinimumWidth(92)
+        self.image_position_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        position_action = toolbar.addWidget(self.image_position_label)
+        position_action.setEnabled(True)
+        toolbar.addAction(self.next_image_action)
         toolbar.addSeparator()
-        toolbar.addActions((self.manual_action, self.manual_5x5_action))
+        toolbar.addAction(self.fit_action)
+        toolbar.addAction(self.actual_action)
+        toolbar.addAction(self.zoom_in_action)
+        toolbar.addAction(self.zoom_out_action)
         toolbar.addSeparator()
-        toolbar.addActions((self.report_action, self.dataset_report_action, self.export_results_action))
+        toolbar.addAction(self.run_action)
+        toolbar.addAction(self.manual_5x5_action)
+        toolbar.addAction(self.dataset_report_action)
         self.addToolBar(toolbar)
 
     def _build_status_bar(self) -> None:
@@ -377,8 +423,11 @@ class MainWindow(QMainWindow):
         )
         self.progress_label = QLabel("")
         self.coordinate_label = QLabel("x —  y —  value —")
+        self.workspace_status_label = QLabel("")
+        self.workspace_status_label.setProperty("role", "caption")
         self.statusBar().addWidget(self.scientific_notice, 1)
         self.statusBar().addWidget(self.progress_label)
+        self.statusBar().addPermanentWidget(self.workspace_status_label)
         self.statusBar().addPermanentWidget(self.coordinate_label)
 
     # ------------------------------------------------------------------ wire
@@ -439,6 +488,12 @@ class MainWindow(QMainWindow):
         self.manual_panel.removeRequested.connect(self._manual_remove)
         self.manual_panel.skipRequested.connect(self._manual_skip)
         self.manual_panel.nextImageRequested.connect(self._manual_next_image)
+        self.dataset_panel.exploreRequested.connect(self._explore_results)
+        self.report_header.datasetReportRequested.connect(self._generate_dataset_report)
+        self.report_header.bundleExportRequested.connect(self._export_bundle)
+        self.report_header.imageReportRequested.connect(self._generate_report)
+        self.viewer.fieldSampleClicked.connect(self._show_inspector_details)
+        self.viewer.recordSelected.connect(self._show_inspector_details)
 
     # ----------------------------------------------------------- workspace io
 
@@ -460,12 +515,36 @@ class MainWindow(QMainWindow):
 
     def _dataset_loaded(self) -> None:
         self.dataset_panel.refresh()
+        self._update_landing()
+        self._update_workspace_status()
+        self.set_mode(self._mode)
+
+    def _explore_results(self) -> None:
+        self.set_mode("analyze")
+        self.bottom_tabs.setCurrentWidget(self.distributions_panel)
+
+    def _show_inspector_details(self, *_args) -> None:
+        if self._field_sample_index is not None:
+            self.inspector_tabs.setCurrentWidget(self.workspace_inspector)
+        elif self.session.selected_record() is not None:
+            self.inspector_tabs.setCurrentWidget(self.inspector_panel)
+        else:
+            self.inspector_tabs.setCurrentWidget(self.image_summary_panel)
 
     def _dataset_run_requested(self, action: str) -> None:
         if action == "all":
             self.workspace.run_all_dataset()
         else:
             self.workspace.run_missing()
+
+    def _update_image_position(self) -> None:
+        dataset = self.workspace.dataset
+        if dataset is None or self.workspace.current_image is None:
+            self.image_position_label.setText("—")
+            return
+        self.image_position_label.setText(
+            f"Image {self.workspace.current_index + 1:02d} / {len(dataset.images):02d}"
+        )
 
     def _workspace_image_changed(self) -> None:
         image = self.session.image
@@ -478,17 +557,24 @@ class MainWindow(QMainWindow):
         self._refresh_all()
         self._update_calibration()
         self._update_title()
+        self._update_image_position()
+        self._update_workspace_status()
+        self._update_landing()
 
     def _workspace_results_changed(self) -> None:
         self._refresh_workspace_panels()
         self._refresh_overlays()
         self._refresh_manual_panel()
+        self._update_image_position()
+        self._update_workspace_status()
+        self.image_summary_panel.set_image(self.session.image, self.workspace.comparison)
 
     def _refresh_workspace_panels(self) -> None:
         comparison = self.workspace.comparison
         payload = self.workspace.summary_payload
         image = self.session.image
         self.summary_panel.set_image(image)
+        self.image_summary_panel.set_image(image, comparison)
         if comparison is not None:
             self.summary_panel.set_comparison(comparison)
             self.distributions_panel.set_comparison(comparison)
@@ -569,6 +655,7 @@ class MainWindow(QMainWindow):
         self._field_sample_index = int(index)
         self.measurements_panel.select_field_row(self._field_sample_index)
         self._refresh_field_selection()
+        self.inspector_tabs.setCurrentWidget(self.workspace_inspector)
         point = self.overlay_layers.sample_position_px(self._field_sample_index)
         if point is not None:
             self.viewer.centerOn(point)
@@ -662,6 +749,7 @@ class MainWindow(QMainWindow):
     def _show_comparison(self) -> None:
         if self.workspace.comparison is None and self.workspace.current_image is not None:
             self.workspace.run_current_image()
+        self.set_mode("analyze")
         self.bottom_tabs.setCurrentWidget(self.comparison_panel)
 
     def _start_manual_tool(self) -> None:
@@ -669,7 +757,7 @@ class MainWindow(QMainWindow):
         self.tool_actions["projected_width"].setChecked(True)
 
     def _show_manual_5x5(self) -> None:
-        self.bottom_tabs.setCurrentWidget(self.manual_panel)
+        self.set_mode("manual")
         if self.workspace.current_image is not None:
             self.manual_panel.next_target()
 
@@ -718,37 +806,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export failed", str(exc))
             return
         self.statusBar().showMessage(f"Exported {len(written)} files to {directory}", 8000)
-
-    def _methods_help(self) -> None:
-        text = (
-            "<h3>MATLAB SIMPoly</h3><p>Native MATLAB implementation of the SIMPoly pipeline. "
-            "In this workspace it is consumed from the validated oracle cache; b1 is the "
-            "reported native Gaussian center.</p>"
-            "<h3>Python SIMPoly</h3><p>Python port of SIMPoly. Common estimand: calibrated "
-            "length-weighted diameters on the skeleton. Known divergence: bwskel.</p>"
-            "<h3>Fathom Local</h3><p>Local cross-section metrology on detected fiber "
-            "candidates within the active ROI.</p>"
-            "<h3>Fathom Field</h3>"
-            "<p><b>EDT</b> — Twice the physical distance from the sampled centerline to the "
-            "nearest background boundary.</p>"
-            "<p><b>Paired Edge</b> — Distance between both local mask boundaries measured "
-            "along the local fiber normal.</p>"
-            "<p><b>Intensity Profile</b> — Paired-edge width refined against local subpixel "
-            "gradient transitions in the raw SEM image.</p>"
-            "<p>Fathom Field is an experimental field-measuring method. Graph reconstruction "
-            "and fiber instances are not implemented.</p>"
-            "<h3>Fathom Field / Oriented Ribbon V1</h3>"
-            "<p><b>EXPERIMENTAL</b> — geometric centerline refinement from paired opposite "
-            "boundaries: local midpoints, a confidence-weighted smooth centerline on "
-            "non-branching runs, then re-measurement of EDT, paired-edge and profile along "
-            "it. Validated on known-truth synthetic geometry; real SEM results represent "
-            "method behavior/agreement, not known absolute accuracy.</p>"
-            "<h3>Manual 5×5</h3><p>Operator reference grid: 25 positions per image, "
-            "perpendicular width measurements.</p>"
-            "<h3>Consensus</h3><p>Equal-method quantile pseudo-reference across participating "
-            "methods. Not ground truth.</p>"
-        )
-        QMessageBox.information(self, "About methods", text)
 
     def _view_mode_changed(self, action: QAction) -> None:
         if action is self.view_measurements_action:
@@ -817,7 +874,22 @@ class MainWindow(QMainWindow):
     def _workspace_manual_changed(self) -> None:
         self._refresh_manual_panel()
         self._refresh_workspace_panels()
+        self._manual_feedback()
+        self._update_workspace_status()
         self.manual_panel.accept_and_advance()
+
+    def _manual_feedback(self) -> None:
+        review = self.workspace.manual_review
+        if review is None:
+            return
+        latest = None
+        for row in range(5):
+            for column in range(5):
+                cell = review.cell(row, column)
+                if cell.diameter is not None:
+                    latest = cell
+        if latest is not None and latest.diameter is not None:
+            self.manual_panel.flash_feedback(f"{latest.diameter:.3f} µm · Saved ✓")
 
     # ------------------------------------------------------------- session
 
@@ -871,9 +943,11 @@ class MainWindow(QMainWindow):
         if record_id is None:
             self._field_sample_index = None
             self.viewer.set_field_selection_highlight(None)
+            self.inspector_tabs.setCurrentWidget(self.image_summary_panel)
         if self._selection_sync or record_id == self.session.selected_record_id:
             return
         self.session.select(record_id)
+        self._show_inspector_details()
 
     def _update_title(self) -> None:
         project = self.session.project
@@ -1254,10 +1328,143 @@ class MainWindow(QMainWindow):
             if self.active_task:
                 self.active_task.cancel()
             self.workspace._cancel_tasks()
+            self._persist_window_state()
             event.accept()
         else:
             event.ignore()
 
+
+
+    # ------------------------------------------------------------------ modes
+
+    MODE_TABS: ClassVar[dict[str, frozenset[str] | None]] = {
+        "analyze": frozenset({"DISTRIBUTIONS", "COMPARE METHODS", "QUALITY"}),
+        "manual": frozenset({"MANUAL 5×5"}),
+        "report": frozenset({"SUMMARY", "DISTRIBUTIONS", "COMPARE METHODS", "QUALITY", "MANUAL 5×5"}),
+        "advanced": None,
+    }
+    MODE_DOCKS: ClassVar[dict[str, frozenset[str]]] = {
+        "analyze": frozenset({"dataset", "overlay", "inspector"}),
+        "manual": frozenset({"dataset"}),
+        "report": frozenset({"dataset", "inspector"}),
+        "advanced": frozenset({"project", "dataset", "overlay", "inspector"}),
+    }
+
+    def set_mode(self, mode: str) -> None:
+        """Switch the top-level workspace mode (analyze/manual/report/advanced)."""
+        if mode not in self.mode_actions:
+            return
+        self._mode = mode
+        for key, action in self.mode_actions.items():
+            action.setChecked(key == mode)
+        self._apply_mode(mode)
+        self._update_workspace_status()
+
+    def _apply_mode(self, mode: str) -> None:
+        self.bottom_dock.show()
+        for key in ("project", "dataset", "overlay", "inspector"):
+            dock = getattr(self, f"{key}_dock")
+            visible = key in self.MODE_DOCKS[mode]
+            dock.setVisible(visible)
+            dock.setEnabled(True)
+        allowed = self.MODE_TABS[mode]
+        for index in range(self.bottom_tabs.count()):
+            visible = allowed is None or self.bottom_tabs.tabText(index) in allowed
+            self.bottom_tabs.setTabVisible(index, visible)
+        self.report_header.setVisible(mode == "report")
+        if mode == "analyze" and self.bottom_tabs.currentWidget() not in {
+            self.distributions_panel, self.comparison_panel, self.quality_panel,
+        }:
+            self.bottom_tabs.setCurrentWidget(self.distributions_panel)
+        elif mode == "manual":
+            self.bottom_tabs.setCurrentWidget(self.manual_panel)
+            self.manual_panel.next_target()
+        elif mode == "report" and self.bottom_tabs.currentWidget() not in {
+            self.summary_panel, self.distributions_panel, self.comparison_panel,
+            self.quality_panel, self.manual_panel,
+        }:
+            self.bottom_tabs.setCurrentWidget(self.summary_panel)
+
+    def _update_workspace_status(self) -> None:
+        dataset = self.workspace.dataset
+        if dataset is None:
+            self.workspace_status_label.setText("")
+            return
+        image = self.workspace.current_image
+        position = (
+            f"Image {self.workspace.current_index + 1} / {len(dataset.images)}"
+            if image is not None
+            else "No image"
+        )
+        manual = self.workspace.manual
+        manual_text = ""
+        if manual is not None and manual.total_measured:
+            manual_text = f" · manual {manual.total_measured} / 400"
+        self.workspace_status_label.setText(
+            f"{position} · {self._mode.capitalize()}{manual_text}"
+        )
+
+    def _build_landing(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(12)
+        title = QLabel("FATHOM FIBERS")
+        title.setProperty("role", "title")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle = QLabel("Scientific fiber morphology workspace")
+        subtitle.setProperty("role", "muted")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        open_button = QPushButton("Open Dataset")
+        open_button.setProperty("role", "primary")
+        open_button.setMinimumWidth(200)
+        open_button.clicked.connect(self.open_dataset_dialog)
+        hint = QLabel("Analyze · Measure · Report")
+        hint.setProperty("role", "caption")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addSpacing(16)
+        layout.addWidget(open_button, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint)
+        return widget
+
+    def _update_landing(self) -> None:
+        has_dataset = self.workspace.dataset is not None
+        self.central_stack.setCurrentWidget(self.viewer if has_dataset else self.landing)
+        if has_dataset:
+            self._apply_mode(self._mode)
+        else:
+            for dock in (
+                self.project_dock,
+                self.dataset_dock,
+                self.overlay_dock,
+                self.inspector_dock,
+                self.bottom_dock,
+            ):
+                dock.hide()
+
+    def _restore_window_state(self) -> None:
+        if self._smoke_test:
+            return
+        settings = QSettings("Fathom", "Fathom Fibers")
+        geometry = settings.value("window/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        mode = settings.value("window/mode", "analyze")
+        if mode in self.mode_actions:
+            self.set_mode(mode)
+
+    def _persist_window_state(self) -> None:
+        if self._smoke_test:
+            return
+        settings = QSettings("Fathom", "Fathom Fibers")
+        settings.setValue("window/geometry", self.saveGeometry())
+        settings.setValue("window/mode", self._mode)
+
+    def _methods_help(self) -> None:
+        dialog = MethodsOverviewDialog(self)
+        dialog.exec()
 
 def _manual_cell_rect(row: int, column: int, image: ScientificImage) -> QRectF:
     height, width = image.shape
