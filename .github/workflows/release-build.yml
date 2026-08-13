@@ -61,7 +61,7 @@ jobs:
 
       - name: Verify release (frozen smoke ran during the build)
         run: |
-          artifact=$(ls release/FathomFibers-* | grep -v sha256 | head -1)
+          artifact=$(python -c "import glob; print(sorted(glob.glob('release/FathomFibers-*.zip') + glob.glob('release/FathomFibers-*.tar.gz'))[0])")
           python packaging/verify_release.py "$artifact"
         shell: bash
 
