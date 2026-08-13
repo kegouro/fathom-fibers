@@ -251,3 +251,102 @@ def test_empty_states_do_not_crash(qtbot):
     window._generate_dataset_report()
     window.workspace.run_current_image()
     window.close()
+
+
+def test_ribbon_series_in_distributions(qtbot, tmp_path):
+    window, _dataset = make_window(qtbot, tmp_path)
+    series = window.distributions_panel._all_series()
+    names = {name for name, _dist in series}
+    assert "Ribbon Refined EDT" in names
+    assert "Ribbon Refined Edge" in names
+    assert "Ribbon Refined Profile" in names
+    assert "Fathom Field (EDT)" in names  # raw family still present
+
+
+def test_distribution_preset_raw_vs_refined_edt(qtbot, tmp_path):
+    window, _dataset = make_window(qtbot, tmp_path)
+    window.distributions_panel.preset_combo.setCurrentText("RAW vs REFINED EDT")
+    names = {name for name, _dist in window.distributions_panel._all_series()}
+    assert {"Fathom Field (EDT)", "Ribbon Refined EDT"} <= names
+
+
+def test_summary_panel_field_family_rows(qtbot, tmp_path):
+    window, _dataset = make_window(qtbot, tmp_path)
+    labels = []
+    for row in range(window.summary_panel.table.rowCount()):
+        labels.append(window.summary_panel.table.item(row, 0).text())
+    joined = " | ".join(labels)
+    assert "Fathom Field / Raw EDT" in joined
+    assert "Fathom Field / Ribbon EDT" in joined
+    assert "Fathom Field / Ribbon Edge" in joined
+    assert "Fathom Field / Ribbon Profile" in joined
+
+
+def test_quality_panel_ribbon_rows(qtbot, tmp_path):
+    window, _dataset = make_window(qtbot, tmp_path)
+    assert not window.quality_panel.ribbon_table.isHidden()
+    labels = [
+        window.quality_panel.ribbon_table.item(row, 0).text()
+        for row in range(window.quality_panel.ribbon_table.rowCount())
+    ]
+    assert any("Supported centerline coverage" in label for label in labels)
+    assert any("Residual center shift" in label for label in labels)
+
+
+def test_measurements_table_refined_columns(qtbot, tmp_path):
+    window, _dataset = make_window(qtbot, tmp_path)
+    headers = window.measurements_panel.field_model.HEADERS
+    assert "refined EDT" in headers
+    assert "refined Edge" in headers
+    assert "residual shift" in headers
+    assert "refinement" in headers
+
+
+def test_inspector_refinement_section(qtbot, tmp_path):
+    window, _dataset = make_window(qtbot, tmp_path)
+    window._select_field_sample(0)
+    text = window.workspace_inspector.selection.toPlainText()
+    assert "CENTERLINE REFINEMENT" in text
+    assert "RAW VS REFINED WIDTHS" in text
+    assert "Residual shift" in text
+
+
+def test_overlay_panel_ribbon_layers(qtbot, tmp_path):
+    window, _dataset = make_window(qtbot, tmp_path)
+    for key in ("refined_centerline", "midpoints", "refined_edges", "rejected_refined"):
+        assert key in window.overlay_panel.checks, key
+    assert window.overlay_panel.checks["refined_centerline"].isEnabled()
+
+
+def test_missing_ribbon_cache_does_not_crash(qtbot, tmp_path):
+    window, _dataset = make_window(qtbot, tmp_path, precompute=False)
+    window.distributions_panel.set_comparison(None)
+    window.quality_panel.set_comparison(None)
+    window.summary_panel.set_comparison(None)
+    assert window.quality_panel.ribbon_table.rowCount() == 0
+
+
+def test_export_bundle_writes_required_files(qtbot, tmp_path):
+    from fathom_fibers_quick.export_bundle import export_analysis_bundle
+    from fathom_fibers_quick.workspace import WorkspaceCache
+
+    window, dataset = make_window(qtbot, tmp_path)
+    cache = WorkspaceCache(tmp_path)
+    assert cache.has_full("PVDF Jose_01")
+    root = export_analysis_bundle(
+        tmp_path,
+        dataset=dataset,
+        manual_store=window.workspace.manual,
+        output_dir=tmp_path / "bundle",
+    )
+    assert (root / "README.md").exists()
+    assert (root / "results/dataset_summary.csv").exists()
+    assert (root / "results/measurements.csv").exists()
+    assert (root / "results/provenance.json").exists()
+    assert (root / "results/method_results.json").exists()
+    assert (root / "report/index.html").exists()
+    summary = (root / "results/dataset_summary.csv").read_text()
+    assert "Refined EDT" in summary
+    provenance = json.loads((root / "results/provenance.json").read_text())
+    assert provenance["version"] == "0.2.0-experimental"
+    assert "git_commit" in provenance
