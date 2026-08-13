@@ -130,6 +130,18 @@ def main() -> None:
     unified_campaign.add_argument("--case", help="Run one canonical case while preserving unified artifacts")
     campaign_sub.add_parser("unified-report", help="Render unified comparison HTML report")
 
+    validation = sub.add_parser("validation", help="Headless validation reports")
+    validation_sub = validation.add_subparsers(dest="validation_action", required=True)
+    ribbon_report = validation_sub.add_parser(
+        "oriented-ribbon", help="Oriented Ribbon V1 validation report (synthetic + 16 TIFF)"
+    )
+    ribbon_report.add_argument(
+        "--dataset",
+        type=Path,
+        default=Path(os.environ.get("FATHOM_ZEISS_DATASET", "local_data/zeiss/30-07-26")),
+    )
+    ribbon_report.add_argument("--repo", type=Path, default=Path("."))
+
     methods = sub.add_parser("methods", help="List unified scientific method backends")
     methods_sub = methods.add_subparsers(dest="methods_action", required=True)
     methods_sub.add_parser("list", help="List methods and capabilities")
