@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .release_scheme import VERSION
+
 # Replaced by packaging/build_release.py before PyInstaller runs.
 BUILD_COMMIT: str = "0000000000000000000000000000000000000000"
 BUILD_TIMESTAMP: str = ""
@@ -34,7 +36,9 @@ def source_commit() -> str:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
             cwd=str(Path(__file__).resolve().parents[2]),
         )
         commit = result.stdout.strip()
@@ -47,9 +51,7 @@ def source_commit() -> str:
 
 def application_version() -> str:
     """Application version (PEP 440), kept in sync with pyproject.toml."""
-    from . import __version__
-
-    return __version__
+    return VERSION
 
 
 def build_info() -> dict[str, str]:

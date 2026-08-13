@@ -44,7 +44,11 @@ def extract_archive(path: Path) -> Path:
             handle.extractall(target)
     else:
         with tarfile.open(path) as handle:
-            handle.extractall(target)
+            handle.extractall(target, filter="data")
+    # archives contain a single top-level directory; use it as the root
+    children = [child for child in target.iterdir() if child.is_dir()]
+    if len(children) == 1:
+        return children[0]
     return target
 
 

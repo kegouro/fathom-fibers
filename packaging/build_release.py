@@ -53,6 +53,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .release_scheme import VERSION
+
 # Replaced by packaging/build_release.py before PyInstaller runs.
 BUILD_COMMIT: str = "{commit}"
 BUILD_TIMESTAMP: str = "{timestamp}"
@@ -88,14 +90,7 @@ def source_commit() -> str:
 
 def application_version() -> str:
     """Package version (PEP 440) for provenance and diagnostics."""
-    try:
-        from importlib.metadata import version
-
-        return version("fathom-fibers-quick")
-    except Exception:
-        from .. import __version__
-
-        return __version__
+    return VERSION
 
 
 def build_info() -> dict[str, str]:
@@ -126,7 +121,9 @@ def describe() -> str:
 def git_commit() -> str:
     result = subprocess.run(
         ["git", "-C", str(REPO), "rev-parse", "HEAD"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     return result.stdout.strip() if result.returncode == 0 else "unknown"
 
@@ -134,7 +131,9 @@ def git_commit() -> str:
 def git_clean() -> bool:
     result = subprocess.run(
         ["git", "-C", str(REPO), "status", "--porcelain"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     return result.returncode == 0 and not result.stdout.strip()
 
@@ -153,12 +152,13 @@ def write_build_info(commit: str, platform_tag: str) -> None:
 def restore_build_info() -> None:
     subprocess.run(
         ["git", "-C", str(REPO), "checkout", "--", str(BUILD_INFO.relative_to(REPO))],
-        capture_output=True, check=False,
+        capture_output=True,
+        check=False,
     )
 
 
-def run(cmd: list[str]) -> None:
-    subprocess.run(cmd, check=True)
+def run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
+    subprocess.run(cmd, check=True, env=env)
 
 
 def frozen_smoke(app_path: Path) -> bool:
@@ -166,7 +166,11 @@ def frozen_smoke(app_path: Path) -> bool:
     env["QT_QPA_PLATFORM"] = "offscreen"
     result = subprocess.run(
         [str(app_path), "gui", "--smoke-test"],
-        capture_output=True, text=True, env=env, timeout=240, check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=240,
+        check=False,
     )
     return result.returncode == 0
 
@@ -225,8 +229,25 @@ def main() -> int:
     write_build_info(commit, platform_tag)
     try:
         print("[2/8] running PyInstaller (native)")
-        run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-             "--distpath", str(DIST_DIR), "--workpath", str(BUILD_DIR), str(SPEC)])
+        build_env = dict(os.environ)
+        # pin the package to this checkout so an editable install in the
+        # interpreter's environment cannot shadow the release source
+        build_env["PYTHONPATH"] = str(REPO / "src")
+        run(
+            [
+                sys.executable,
+                "-m",
+                "PyInstaller",
+                "--noconfirm",
+                "--clean",
+                "--distpath",
+                str(DIST_DIR),
+                "--workpath",
+                str(BUILD_DIR),
+                str(SPEC),
+            ],
+            env=build_env,
+        )
 
         app_dir = DIST_DIR / "FathomFibers"
         if not app_dir.exists():
@@ -238,7 +259,11 @@ def main() -> int:
             print("frozen smoke test FAILED", file=sys.stderr)
             return 4
 
-        print("[4/8] restoring committed build-info placeholder")
+        print("[4/8] removing stale developer distribution metadata")
+        internal = app_dir / "_internal"
+        for dist_info in internal.glob("fathom_fibers_quick-*.dist-info"):
+            shutil.rmtree(dist_info)
+        print("[4b/8] restoring committed build-info placeholder")
     finally:
         restore_build_info()
 
@@ -259,14 +284,20 @@ def main() -> int:
     (staging / "VERSION").write_text(f"{version}\ncommit {commit}\n", encoding="utf-8")
 
     print("[6/8] archiving")
-    artifact = RELEASE_DIR / f"{artifact_name}.tar.gz" if platform_tag.startswith(("linux", "macos")) else RELEASE_DIR / f"{artifact_name}.zip"
+    artifact = (
+        RELEASE_DIR / f"{artifact_name}.tar.gz"
+        if platform_tag.startswith(("linux", "macos"))
+        else RELEASE_DIR / f"{artifact_name}.zip"
+    )
     if artifact.exists():
         artifact.unlink()
     archive_tree(staging, artifact, platform_tag=platform_tag)
 
     print("[7/8] checksum")
     digest = sha256(artifact)
-    (RELEASE_DIR / f"{artifact.name}.sha256").write_text(f"{digest}  {artifact.name}\n", encoding="utf-8")
+    (RELEASE_DIR / f"{artifact.name}.sha256").write_text(
+        f"{digest}  {artifact.name}\n", encoding="utf-8"
+    )
 
     print(f"[8/8] artifact: {artifact}")
     print(f"size: {artifact.stat().st_size} bytes")
