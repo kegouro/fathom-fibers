@@ -203,8 +203,9 @@ def report_header(title: str, lead: str, chips: list[tuple[str, str]], badges: l
 </header>"""
 
 
-def section(heading: str, body: str) -> str:
-    return f"<section><h2>{html_module.escape(heading)}</h2>{body}</section>"
+def section(heading: str, body: str, *, id_: str | None = None) -> str:
+    anchor = f" id='{id_}'" if id_ else ""
+    return f"<section{anchor}><h2>{html_module.escape(heading)}</h2>{body}</section>"
 
 
 def subsection(heading: str, body: str) -> str:
