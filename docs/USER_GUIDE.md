@@ -103,9 +103,11 @@ Missing measurements are never invented or filled in.
 Press `R` to enter Report mode. The header offers:
 
 - **Generate Dataset Scientific Report** — the main final analysis of the full
-  dataset (HTML, 12 sections: dataset, calibration, methods, per-image results,
-  distributions, Manual 5×5, Field diagnostics, Oriented Ribbon refinement,
-  method comparisons, quality, provenance, limitations).
+  dataset (HTML: dataset overview, image-level method summary, Oriented Ribbon
+  dataset behavior, figures, quality, Manual 5×5, methods, per-image sections,
+  provenance, limitations). Per-image reports lead with a Scientific Summary,
+  key diameter results, a Raw-vs-Ribbon centerline refinement table, primary and
+  full-range distributions, agreement, quality and limitations.
 - **Export Analysis Bundle** — a portable results package (see below).
 - **Current Image Report** — a report for the single selected image.
 
