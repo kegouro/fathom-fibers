@@ -15,7 +15,7 @@ from fathom_fibers_quick.oracles.simpoly_source import PROFILE_CONTROLLED_INPUT_
 from fathom_fibers_quick.project_io import verify_project_source
 from fathom_fibers_quick.ui.main_window import MainWindow
 
-PRIMARY_NAMES = ("PVDF Jose_02.tif", "PVDF Jose_09.tif", "PVDF Jose_13.tif")
+PRIMARY_NAMES = tuple(n for n in os.environ.get("FATHOM_PRIMARY_NAMES", "").split(",") if n)
 
 
 def _find_images(root: Path) -> list[Path]:
@@ -124,7 +124,7 @@ def run(root: Path, output: Path) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, default=Path("local_data/zeiss"))
+    parser.add_argument("--input", type=Path, default=Path(os.environ.get("FATHOM_ZEISS_DATASET", "data/zeiss")))
     parser.add_argument(
         "--output",
         type=Path,

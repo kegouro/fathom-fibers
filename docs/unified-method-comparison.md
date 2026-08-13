@@ -34,7 +34,7 @@ MAD disagreement envelope. It is not ground truth.
 ```bash
 fathom-fibers methods list
 fathom-fibers compare --image image.tif --matlab-cache-root .validation/real-tiff-campaign
-fathom-fibers campaign unified --dataset local_data/zeiss/30-07-26 \
+fathom-fibers campaign unified --dataset /path/to/tiffs \
   --matlab-cache-root /path/to/.validation/real-tiff-campaign
 fathom-fibers campaign unified-report
 ```

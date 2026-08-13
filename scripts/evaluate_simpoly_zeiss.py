@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fathom_fibers_quick.oracles.report import generate_simpoly_validation_report
@@ -9,14 +10,14 @@ from fathom_fibers_quick.zeiss import load_image_document
 
 
 def evaluate_zeiss_campaign():
-    tiff_dir = Path("local_data/zeiss")
+    tiff_dir = Path(os.environ.get("FATHOM_ZEISS_DATASET", "data/zeiss"))
     if not tiff_dir.exists():
-        print("local_data/zeiss directory not found. Skipping Zeiss evaluation.")
+        print("Zeiss dataset directory not found. Skipping Zeiss evaluation.")
         return
 
-    primary_names = ["PVDF Jose_02.tif", "PVDF Jose_09.tif", "PVDF Jose_13.tif"]
-    borderline_names = ["PVDF Jose_01.tif", "PVDF Jose_15.tif", "PVDF Jose_16.tif"]
-    unsupported_names = ["PVDF Jose_03.tif", "PVDF Jose_04.tif", "PVDF Jose_05.tif", "PVDF Jose_10.tif", "PVDF Jose_14.tif"]
+    primary_names = [n for n in os.environ.get("FATHOM_PRIMARY_NAMES", "").split(",") if n]
+    borderline_names = [n for n in os.environ.get("FATHOM_BORDERLINE_NAMES", "").split(",") if n]
+    unsupported_names = [n for n in os.environ.get("FATHOM_UNSUPPORTED_NAMES", "").split(",") if n]
 
     all_tiffs = list(tiff_dir.rglob("*.tif")) + list(tiff_dir.rglob("*.tiff"))
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -22,11 +23,17 @@ from fathom_fibers_quick.workspace import (
 pytestmark = pytest.mark.qt
 
 REPO = Path("/tmp/fathom-worktrees/unified-methods")
-DATASET_DIR = "/home/kegouro/HIBRIS/Workshop ⁄ Proyectos/fathom-fibers/local_data/zeiss/30-07-26"
+
+
+def _dataset_root() -> Path:
+    root = os.environ.get("FATHOM_ZEISS_DATASET")
+    if not root:
+        pytest.skip("private Zeiss dataset not present; set FATHOM_ZEISS_DATASET")
+    return Path(root)
 
 
 def _dataset():
-    return load_workspace_dataset(DATASET_DIR, repo=REPO)
+    return load_workspace_dataset(_dataset_root(), repo=REPO)
 
 
 def _comparisons():

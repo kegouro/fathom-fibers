@@ -89,6 +89,8 @@ def main() -> int:
     if not binary.exists():
         binary = app_dir / "FathomFibers"
     if not binary.exists():
+        binary = app_dir / "FathomFibers.exe"
+    if not binary.exists():
         fail("main executable not found")
     else:
         print(f"OK: executable {binary}")

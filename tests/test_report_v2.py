@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -24,10 +25,18 @@ from fathom_fibers_quick.workspace import (
 pytestmark = pytest.mark.qt
 
 
+def _dataset_root() -> Path:
+    root = os.environ.get("FATHOM_ZEISS_DATASET")
+    if not root:
+        pytest.skip("private Zeiss dataset not present; set FATHOM_ZEISS_DATASET")
+    return Path(root)
+
+
 def real_comparison() -> object:
     cache = WorkspaceCache()
     comparison = cache.load_comparison("PVDF Jose_01")
-    assert comparison is not None, "cached PVDF Jose_01 required"
+    if comparison is None:
+        pytest.skip("cached comparison not present; run the private campaign first")
     return comparison
 
 
@@ -56,9 +65,7 @@ def test_image_report_scientific_summary():
     comparison = real_comparison()
     from fathom_fibers_quick.api import FathomEngine
 
-    image = FathomEngine().open_image(
-        "/home/kegouro/HIBRIS/Workshop ⁄ Proyectos/fathom-fibers/local_data/zeiss/30-07-26/PVDF Jose_01.tif"
-    )
+    image = FathomEngine().open_image(str(_dataset_root() / "PVDF Jose_01.tif"))
     out = build_image_report(comparison, image, output_dir=Path("/tmp/opencode/report-v2/test-image"))
     text = out.read_text()
     assert "Scientific Summary" in text
@@ -79,9 +86,7 @@ def test_image_report_numerical_invariance():
     comparison = real_comparison()
     from fathom_fibers_quick.api import FathomEngine
 
-    image = FathomEngine().open_image(
-        "/home/kegouro/HIBRIS/Workshop ⁄ Proyectos/fathom-fibers/local_data/zeiss/30-07-26/PVDF Jose_01.tif"
-    )
+    image = FathomEngine().open_image(str(_dataset_root() / "PVDF Jose_01.tif"))
     out = build_image_report(comparison, image, output_dir=Path("/tmp/opencode/report-v2/test-invariance"))
     text = out.read_text()
     # every median that appears in the refinement table must equal the
@@ -105,10 +110,7 @@ def test_image_report_numerical_invariance():
 
 def test_dataset_report_sections():
     repo = Path("/tmp/fathom-worktrees/unified-methods")
-    dataset = load_workspace_dataset(
-        "/home/kegouro/HIBRIS/Workshop ⁄ Proyectos/fathom-fibers/local_data/zeiss/30-07-26",
-        repo=repo,
-    )
+    dataset = load_workspace_dataset(_dataset_root(), repo=repo)
     out = build_final_dataset_report(
         repo, dataset=dataset, manual_store=None, output_dir=repo / ".validation/final-report-v2-test"
     )
@@ -138,7 +140,8 @@ def test_dataset_ribbon_section_computed_not_hardcoded():
     repo = Path("/tmp/fathom-worktrees/unified-methods")
     cache = WorkspaceCache(repo)
     comparison = cache.load_comparison("PVDF Jose_01")
-    assert comparison is not None
+    if comparison is None:
+        pytest.skip("cached comparison not present; run the private campaign first")
     from fathom_fibers_quick.reports import _dataset_ribbon_metrics
 
     metrics = _dataset_ribbon_metrics([comparison])
@@ -170,12 +173,15 @@ def test_export_bundle_uses_new_report():
     repo = Path("/tmp/fathom-worktrees/unified-methods")
     cache = WorkspaceCache(repo)
     comparison = cache.load_comparison("PVDF Jose_01")
+    if comparison is None:
+        pytest.skip("cached comparison not present; run the private campaign first")
     dataset = WorkspaceDataset(
-        "ZEISS_PVDF_2026-07-30",
+        "ZEISS_TEST_DATASET",
         (
             WorkspaceImage(
-                "ZEISS_001", "PVDF Jose_01.tif",
-                Path("/home/kegouro/HIBRIS/Workshop ⁄ Proyectos/fathom-fibers/local_data/zeiss/30-07-26/PVDF Jose_01.tif"),
+                "ZEISS_001",
+                "PVDF Jose_01.tif",
+                Path("/tmp/zeiss-dataset/PVDF Jose_01.tif"),
             ),
         ),
     )

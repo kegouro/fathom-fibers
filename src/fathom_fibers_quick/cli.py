@@ -102,7 +102,7 @@ def main() -> None:
     inventory.add_argument("--output", "-o", default="zeiss_inventory.csv")
 
     eval_roi = sub.add_parser("evaluate-auto-roi", help="Evaluate Auto-ROI campaign on Zeiss TIFFs")
-    eval_roi.add_argument("--input-dir", "-i", default="local_data/zeiss")
+    eval_roi.add_argument("--input-dir", "-i", default="data/zeiss")
     eval_roi.add_argument("--output-dir", "-o", default="local_results/auto_roi_campaign")
 
     sub.add_parser("benchmark", help="Run the bundled deterministic SIMPoly benchmark")
@@ -135,7 +135,7 @@ def main() -> None:
         "unified", help="Run cached MATLAB/Python/Fathom unified comparison"
     )
     unified_campaign.add_argument(
-        "--dataset", type=Path, default=Path(os.environ.get("FATHOM_ZEISS_DATASET", "local_data/zeiss/30-07-26"))
+        "--dataset", type=Path, default=Path(os.environ.get("FATHOM_ZEISS_DATASET", "data/zeiss"))
     )
     unified_campaign.add_argument("--matlab-cache-root", type=Path)
     unified_campaign.add_argument("--resume", action="store_true")
@@ -150,7 +150,7 @@ def main() -> None:
     ribbon_report.add_argument(
         "--dataset",
         type=Path,
-        default=Path(os.environ.get("FATHOM_ZEISS_DATASET", "local_data/zeiss/30-07-26")),
+        default=Path(os.environ.get("FATHOM_ZEISS_DATASET", "data/zeiss")),
     )
     ribbon_report.add_argument("--repo", type=Path, default=Path("."))
 

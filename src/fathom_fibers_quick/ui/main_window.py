@@ -69,7 +69,7 @@ from .workspace_controller import WorkspaceController
 logger = logging.getLogger(__name__)
 
 DEFAULT_DATASET_CANDIDATES = (
-    Path("local_data/zeiss/30-07-26"),
+    Path("data/zeiss"),
 )
 
 OVERLAY_DEFAULTS = {"manual", "edges", "refined_centerline", "refined_edges"}
