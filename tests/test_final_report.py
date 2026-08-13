@@ -72,9 +72,9 @@ def test_final_dataset_report_sections(tmp_path):
     text = out.read_text()
     for section in (
         "Scientific Morphological Fiber Analysis",
-        "Oriented Ribbon V1",
+        "Oriented Ribbon dataset behavior",
         "EXPERIMENTAL",
-        "Method comparisons",
+        "Dataset method summary",
         "Limitations",
         "Provenance",
     ):
@@ -111,7 +111,7 @@ def test_image_report_includes_ribbon_series(tmp_path):
     comparison = cache.load_comparison("synthetic")
     out = build_image_report(comparison, image, output_dir=tmp_path / "image-report")
     assert out.exists()
-    assert (out.parent / "figure-histogram.png").exists()
+    assert (out.parent / "figure-primary-histogram.png").exists()
 
 
 def test_export_bundle_schemas(tmp_path):

@@ -270,14 +270,15 @@ def test_reports_build_headless(tmp_path):
     comparison = engine.compare_all_methods(image)
     image_report = build_image_report(comparison, image, output_dir=tmp_path / "report-image")
     assert image_report.exists()
-    assert (image_report.parent / "figure-histogram.png").exists()
-    assert (image_report.parent / "figure-ecdf.png").exists()
-    assert (image_report.parent / "figure-field-estimators.png").exists()
-    assert (image_report.parent / "figure-method-summary.png").exists()
+    assert (image_report.parent / "figure-primary-histogram.png").exists()
+    assert (image_report.parent / "figure-full-histogram.png").exists()
+    assert (image_report.parent / "figure-field-raw-vs-ribbon.png").exists()
+    assert (image_report.parent / "figure-method-summary-primary.png").exists()
     text = image_report.read_text()
     assert "Method summary" in text
     assert "INCOMPLETE REFERENCE" in text
-    assert "Agreement and consensus pseudo-reference are not ground truth" in text
+    assert "Scientific Summary" in text
+    assert "not ground truth" in text
 
     runs = tmp_path / VALIDATION_ROOT / "runs"
     runs.mkdir(parents=True)
