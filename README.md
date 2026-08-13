@@ -8,6 +8,20 @@ same scientific engine to the PySide6 application and SPMKit adapter.
 > Measurements represent projected 2D geometry. Automatic results enter as
 > `PROPOSED` and are excluded from primary statistics until reviewed.
 
+## Release artifacts
+
+Prebuilt, portable desktop releases (no Python installation required) are
+provided for Linux, Windows and macOS:
+
+`FathomFibers-0.2.0-rc1-<platform>-<arch>.tar.gz` / `.zip`
+
+Each archive contains the application, `README_FIRST.md`, `LICENSE`,
+`CHANGELOG.md` and `VERSION`. Scientific status: Python SIMPoly is a
+source-compatible approximation validated against MATLAB with a known library
+divergence; Fathom Field and Oriented Ribbon V1 are experimental; Manual 5×5
+is a sparse human reference; Consensus is a pseudo-reference. Real SEM results
+characterize agreement, not known absolute accuracy.
+
 ## Start in under two minutes
 
 ```bash
@@ -76,8 +90,8 @@ runs the unified methods, compares distributions, reviews individual field
 measurements and completes the manual 5×5 protocol.
 
 1. **Launch** — `fathom-fibers` (or `./launch.py`).
-2. **Open dataset** — toolbar or *File → Open dataset*; the canonical corpus is
-   `local_data/zeiss/30-07-26`. The DATASET dock lists the 16 images with
+2. **Open dataset** — toolbar or *File → Open dataset*; choose the folder
+   containing your SEM TIFF images. The DATASET dock lists the images with
    `complete / summary cache / not analyzed` status and per-image manual progress.
 3. **Run methods** — `R` opens the run dialog: Python SIMPoly, Fathom Local and
    Fathom Field run in background workers; MATLAB is consumed from the validated
