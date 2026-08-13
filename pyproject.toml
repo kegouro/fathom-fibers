@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gui = ["PySide6>=6.8"]
+gui = ["PySide6>=6.8", "matplotlib>=3.8"]
 validation = ["matplotlib>=3.8"]
 spmkit = ["spmkit>=0.1.5.dev0"]
 dev = ["pytest>=8", "pytest-qt>=4.4", "ruff>=0.6"]
