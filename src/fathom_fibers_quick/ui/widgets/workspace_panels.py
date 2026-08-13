@@ -103,7 +103,13 @@ class DatasetPanel(QWidget):
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.open_button = QPushButton("Open Dataset…")
         self.run_all_button = QPushButton("Run all dataset")
+        self.run_all_button.setToolTip(
+            "Recompute the analysis for every dataset image, including cached ones."
+        )
         self.run_missing_button = QPushButton("Run missing")
+        self.run_missing_button.setToolTip(
+            "Analyze only dataset images without a valid cached result."
+        )
         buttons = QHBoxLayout()
         buttons.addWidget(self.open_button)
         buttons.addWidget(self.run_all_button)
@@ -1704,35 +1710,9 @@ class ReportHeaderPanel(QWidget):
         self.image_button.clicked.connect(self.imageReportRequested)
 
 
-class MethodsOverviewDialog(QDialog):
-    """Structured methods overview: name, purpose, status, detailed info."""
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("About methods")
-        self.setMinimumSize(640, 520)
-        self._details: dict[str, str] = {}
-        layout = QVBoxLayout(self)
-        title = QLabel("Fathom Fibers — measurement methods")
-        title.setProperty("role", "title")
-        layout.addWidget(title)
-        self.list = QTableWidget(0, 3)
-        self.list.setHorizontalHeaderLabels(["Method", "Purpose", "Status"])
-        self.list.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.list.cellDoubleClicked.connect(self._show_details)
-        layout.addWidget(self.list, 1)
-        info = QLabel(
-            "Double-click a row for the full scientific description, including caveats."
-        )
-        info.setProperty("role", "caption")
-        layout.addWidget(info)
-        self._populate()
-
-    def _populate(self) -> None:
-        entries = [
+def method_entries() -> list[tuple[str, str, str, str]]:
+    """Structured methods overview data shared by the in-app help dialogs."""
+    return [
             (
                 "MATLAB SIMPoly",
                 "Native MATLAB SIMPoly consumed from the validated oracle cache.",
@@ -1800,6 +1780,36 @@ class MethodsOverviewDialog(QDialog):
                 ("<p>Not ground truth. Field estimator variants do not add independent votes.</p>"),
             ),
         ]
+
+class MethodsOverviewDialog(QDialog):
+    """Structured methods overview: name, purpose, status, detailed info."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("About methods")
+        self.setMinimumSize(640, 520)
+        self._details: dict[str, str] = {}
+        layout = QVBoxLayout(self)
+        title = QLabel("Fathom Fibers — measurement methods")
+        title.setProperty("role", "title")
+        layout.addWidget(title)
+        self.list = QTableWidget(0, 3)
+        self.list.setHorizontalHeaderLabels(["Method", "Purpose", "Status"])
+        self.list.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.list.cellDoubleClicked.connect(self._show_details)
+        layout.addWidget(self.list, 1)
+        info = QLabel(
+            "Double-click a row for the full scientific description, including caveats."
+        )
+        info.setProperty("role", "caption")
+        layout.addWidget(info)
+        self._populate()
+
+    def _populate(self) -> None:
+        entries = method_entries()
         self.list.setRowCount(len(entries))
         for row_index, (name, purpose, status, details) in enumerate(entries):
             self.list.setItem(row_index, 0, QTableWidgetItem(name))

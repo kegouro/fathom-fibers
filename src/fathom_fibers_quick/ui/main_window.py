@@ -36,6 +36,7 @@ from ..oracles.simpoly_source import PROFILE_CONTROLLED_INPUT_V1, PROFILE_SOURCE
 from ..project_io import SourceVerificationStatus, verify_project_source
 from ..unified_comparison import UnifiedMethodComparison
 from .commands import HistoryBridge
+from .help import PAGE_METHODS, PAGE_QUICK_START, PAGE_SHORTCUTS, PAGE_USER_GUIDE, HelpDialog
 from .overlays import OverlayLayers, build_overlay_payload
 from .tasks import AnalysisTask
 from .widgets import (
@@ -150,6 +151,8 @@ class MainWindow(QMainWindow):
 
         if initial_path:
             QTimer.singleShot(0, lambda: self.open_path(initial_path))
+        if not self._quick_start_seen:
+            QTimer.singleShot(900, lambda: self._open_help(PAGE_QUICK_START))
 
     # ------------------------------------------------------------------ docks
 
@@ -250,6 +253,9 @@ class MainWindow(QMainWindow):
     def _build_actions(self) -> None:
         self.open_image_action = self._action("Open image…", self.open_image_dialog, "Ctrl+O")
         self.open_dataset_action = self._action("Open dataset…", self.open_dataset_dialog)
+        self.open_dataset_action.setToolTip(
+            "Open a folder of SEM images as a dataset."
+        )
         self.open_project_action = self._action("Open project…", self.open_project_dialog)
         self.save_action = self._action("Save project", self.save_project, "Ctrl+S")
         self.save_as_action = self._action("Save project as…", self.save_project_as, "Ctrl+Shift+S")
@@ -266,19 +272,35 @@ class MainWindow(QMainWindow):
         self.zoom_out_action = self._action("Zoom out", self._zoom_out, "Ctrl+-")
         self.previous_image_action = self._action("Previous image", self._previous_image, "Left")
         self.next_image_action = self._action("Next image", self._next_image, "Right")
-        self.run_action = self._action("Run methods…", self._run_methods_dialog, "R")
+        self.run_action = self._action("Run methods…", self._run_methods_dialog)
         self.run_all_action = self._action("Run all dataset methods", self._run_all_dataset)
+        self.run_all_action.setToolTip(
+            "Recompute the analysis for every dataset image, including cached ones."
+        )
         self.compare_action = self._action("Compare methods", self._show_comparison)
         self.manual_action = self._action("Manual measurement", self._start_manual_tool, "M")
         self.manual_5x5_action = self._action("Manual 5×5 workflow", self._show_manual_5x5)
+        self.manual_5x5_action.setToolTip(
+            "Open the focused Manual 5×5 measurement workspace."
+        )
         self.report_action = self._action("Generate scientific report", self._generate_report, "Ctrl+R")
         self.dataset_report_action = self._action(
             "Generate dataset scientific report", self._generate_dataset_report
         )
+        self.dataset_report_action.setToolTip(
+            "Generate the full dataset scientific report (HTML)."
+        )
         self.export_results_action = self._action("Export current image results…", self._export_current)
         self.export_dataset_action = self._action("Export dataset results…", self._export_dataset)
         self.export_bundle_action = self._action("Export Analysis Bundle…", self._export_bundle)
+        self.export_bundle_action.setToolTip(
+            "Export results, figures, the HTML report and provenance to a folder."
+        )
         self.methods_help_action = self._action("About methods…", self._methods_help)
+        self.quick_start_action = self._action("Quick Start", lambda: self._open_help(PAGE_QUICK_START))
+        self.user_guide_action = self._action("User Guide", lambda: self._open_help(PAGE_USER_GUIDE))
+        self.methods_guide_action = self._action("Methods Guide", lambda: self._open_help(PAGE_METHODS))
+        self.shortcuts_action = self._action("Keyboard Shortcuts", lambda: self._open_help(PAGE_SHORTCUTS))
 
         self.mode_group = QActionGroup(self)
         self.mode_group.setExclusive(True)
@@ -291,6 +313,14 @@ class MainWindow(QMainWindow):
         for action in self.mode_actions.values():
             self.mode_group.addAction(action)
         self.mode_actions["analyze"].setChecked(True)
+        self.mode_actions["analyze"].setToolTip("Explore automatic measurements and diagnostics.")
+        self.mode_actions["manual"].setToolTip("Focused Manual 5×5 measurement workspace.")
+        self.mode_actions["report"].setToolTip("Generate the scientific report and exports.")
+        self.mode_actions["advanced"].setToolTip("Technical diagnostics for expert use.")
+        self.mode_actions["analyze"].setToolTip("Explore automatic measurements and diagnostics.")
+        self.mode_actions["manual"].setToolTip("Focused Manual 5×5 measurement workspace.")
+        self.mode_actions["report"].setToolTip("Generate the scientific report and exports.")
+        self.mode_actions["advanced"].setToolTip("Technical diagnostics for expert use.")
 
         self.tool_group = QActionGroup(self)
         self.tool_group.setExclusive(True)
@@ -387,8 +417,17 @@ class MainWindow(QMainWindow):
         tools_menu.addActions(self.tool_group.actions())
         tools_menu.addSeparator()
         tools_menu.addAction(self.cancel_action)
-        help_menu = self.menuBar().addMenu("&Help")
-        help_menu.addAction(self.methods_help_action)
+        self.help_menu = self.menuBar().addMenu("&Help")
+        self.help_menu.addActions(
+            (
+                self.quick_start_action,
+                self.user_guide_action,
+                self.methods_guide_action,
+                self.shortcuts_action,
+            )
+        )
+        self.help_menu.addSeparator()
+        self.help_menu.addAction(self.methods_help_action)
 
         toolbar = QToolBar("Main", self)
         toolbar.setObjectName("mainToolbar")
@@ -415,6 +454,10 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.run_action)
         toolbar.addAction(self.manual_5x5_action)
         toolbar.addAction(self.dataset_report_action)
+        toolbar.addSeparator()
+        self.help_button_action = self._action("?", lambda: self._open_help(PAGE_QUICK_START))
+        self.help_button_action.setToolTip("Quick Start")
+        toolbar.addAction(self.help_button_action)
         self.addToolBar(toolbar)
 
     def _build_status_bar(self) -> None:
@@ -1422,10 +1465,13 @@ class MainWindow(QMainWindow):
         hint = QLabel("Analyze · Measure · Report")
         hint.setProperty("role", "caption")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        quick_start_button = QPushButton("Quick Start")
+        quick_start_button.clicked.connect(lambda: self._open_help(PAGE_QUICK_START))
         layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addSpacing(16)
         layout.addWidget(open_button, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(quick_start_button, 0, Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(hint)
         return widget
 
@@ -1465,6 +1511,22 @@ class MainWindow(QMainWindow):
     def _methods_help(self) -> None:
         dialog = MethodsOverviewDialog(self)
         dialog.exec()
+
+    def _open_help(self, page: int) -> None:
+        dialog = HelpDialog(self, page=page)
+        dialog.dont_show_check.setChecked(self._quick_start_seen)
+        dialog.dont_show_check.toggled.connect(self._set_quick_start_seen)
+        dialog.exec()
+
+    def _set_quick_start_seen(self, checked: bool) -> None:
+        if not self._smoke_test:
+            QSettings("Fathom", "Fathom Fibers").setValue("help/quick_start_seen", bool(checked))
+
+    @property
+    def _quick_start_seen(self) -> bool:
+        if self._smoke_test:
+            return True
+        return bool(QSettings("Fathom", "Fathom Fibers").value("help/quick_start_seen", False))
 
 def _manual_cell_rect(row: int, column: int, image: ScientificImage) -> QRectF:
     height, width = image.shape
