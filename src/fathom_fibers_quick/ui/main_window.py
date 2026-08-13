@@ -66,7 +66,7 @@ DEFAULT_DATASET_CANDIDATES = (
     Path("/home/kegouro/HIBRIS/Workshop ⁄ Proyectos/fathom-fibers/local_data/zeiss/30-07-26"),
 )
 
-OVERLAY_DEFAULTS = {"manual", "edges"}
+OVERLAY_DEFAULTS = {"manual", "edges", "refined_centerline", "refined_edges"}
 
 
 class MainWindow(QMainWindow):
@@ -255,6 +255,7 @@ class MainWindow(QMainWindow):
         )
         self.export_results_action = self._action("Export current image results…", self._export_current)
         self.export_dataset_action = self._action("Export dataset results…", self._export_dataset)
+        self.export_bundle_action = self._action("Export Analysis Bundle…", self._export_bundle)
         self.methods_help_action = self._action("About methods…", self._methods_help)
 
         self.tool_group = QActionGroup(self)
@@ -330,6 +331,7 @@ class MainWindow(QMainWindow):
             (
                 self.report_action,
                 self.dataset_report_action,
+                self.export_bundle_action,
                 self.export_results_action,
                 self.export_dataset_action,
             )
@@ -692,6 +694,18 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage(f"Exported {len(written)} files to {directory}", 8000)
 
+    def _export_bundle(self) -> None:
+        if self.workspace.dataset is None:
+            self.statusBar().showMessage("Open a dataset before exporting.", 5000)
+            return
+        directory = QFileDialog.getExistingDirectory(
+            self, "Export analysis bundle", str(Path.cwd() / "release")
+        )
+        if not directory:
+            return
+        self.workspace.export_analysis_bundle(directory)
+        self.statusBar().showMessage("Analysis bundle export running…", 5000)
+
     def _export_dataset(self) -> None:
         if self.workspace.dataset is None:
             self.statusBar().showMessage("Open a dataset before exporting.", 5000)
@@ -724,6 +738,12 @@ class MainWindow(QMainWindow):
             "gradient transitions in the raw SEM image.</p>"
             "<p>Fathom Field is an experimental field-measuring method. Graph reconstruction "
             "and fiber instances are not implemented.</p>"
+            "<h3>Fathom Field / Oriented Ribbon V1</h3>"
+            "<p><b>EXPERIMENTAL</b> — geometric centerline refinement from paired opposite "
+            "boundaries: local midpoints, a confidence-weighted smooth centerline on "
+            "non-branching runs, then re-measurement of EDT, paired-edge and profile along "
+            "it. Validated on known-truth synthetic geometry; real SEM results represent "
+            "method behavior/agreement, not known absolute accuracy.</p>"
             "<h3>Manual 5×5</h3><p>Operator reference grid: 25 positions per image, "
             "perpendicular width measurements.</p>"
             "<h3>Consensus</h3><p>Equal-method quantile pseudo-reference across participating "

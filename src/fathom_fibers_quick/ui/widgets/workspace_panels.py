@@ -3,7 +3,7 @@ quality and manual 5x5 review.  Panels only render controller state."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 from PySide6.QtCore import (
@@ -165,10 +165,15 @@ class OverlayPanel(QWidget):
         ("skeleton", "Python SIMPoly skeleton"),
         ("mask", "Python SIMPoly mask"),
         ("centerline", "Field centerline"),
+        ("raw_centerline", "Raw centerline"),
+        ("refined_centerline", "Refined centerline"),
+        ("midpoints", "Midpoint observations"),
         ("orientation", "Field orientation"),
-        ("edges", "Field paired-edge segments"),
+        ("edges", "Raw paired-edge segments"),
+        ("refined_edges", "Refined paired-edge segments"),
         ("profile", "Field profile-refined edges"),
         ("rejected", "Rejected / flagged samples"),
+        ("rejected_refined", "Rejected refinement samples"),
     )
 
     def __init__(self, parent=None) -> None:
@@ -205,8 +210,11 @@ class OverlayPanel(QWidget):
         local = results.get(MethodId.FATHOM_LOCAL)
         self.checks["skeleton"].setEnabled(python is not None and python.centerline is not None)
         self.checks["mask"].setEnabled(python is not None and python.mask is not None)
-        for key in ("centerline", "orientation", "edges", "profile", "rejected"):
+        for key in ("centerline", "raw_centerline", "orientation", "edges", "profile", "rejected"):
             self.checks[key].setEnabled(field is not None)
+        refined_available = field is not None and "refined_mask" in field.local_samples
+        for key in ("refined_centerline", "midpoints", "refined_edges", "rejected_refined"):
+            self.checks[key].setEnabled(refined_available)
         self.checks["local_sections"].setEnabled(
             local is not None and local.local_samples is not None
         )
@@ -229,9 +237,9 @@ class SummaryPanel(QWidget):
         super().__init__(parent)
         self.info = QTextBrowser()
         self.info.setMinimumHeight(140)
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
-            ["Method", "Status", "N", "Mean", "Median", "IQR", "P05", "P95"]
+            ["Method", "Status", "N", "Coverage", "Mean", "Median", "IQR", "P05", "P95"]
         )
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -266,7 +274,10 @@ class SummaryPanel(QWidget):
         rows: list[tuple[str, ...]] = []
         if comparison is not None:
             for result in comparison.results:
-                rows.append(self._result_row(result))
+                if result.method_id == MethodId.FATHOM_FIELD_GRAPH_V1:
+                    rows.extend(self._field_rows(result))
+                else:
+                    rows.append(self._result_row(result))
             consensus = comparison.consensus
             if consensus.distribution is not None:
                 summary = summarize_distribution(consensus.distribution)
@@ -275,6 +286,7 @@ class SummaryPanel(QWidget):
                         "Consensus",
                         "COMPLETE",
                         str(summary.n),
+                        "—",
                         _fmt(summary.weighted_mean),
                         _fmt(summary.weighted_median),
                         _fmt_range(summary.p25, summary.p75),
@@ -291,6 +303,53 @@ class SummaryPanel(QWidget):
                 self.table.setItem(row_index, column, item)
         self.table.resizeColumnsToContents()
 
+    @classmethod
+    def _field_rows(cls, result: MethodResult) -> list[tuple[str, ...]]:
+        """Fathom Field family rows: raw and Ribbon estimators, grouped."""
+        statistics = result.native_statistics
+        smooth_coverage = statistics.get("smooth_coverage_fraction")
+        raw_rows = [
+            ("Fathom Field / Raw EDT", result.common_distribution,
+             "—", result.status.value),
+            ("Fathom Field / Raw Edge",
+             result.secondary_distributions.get("FATHOM_FIELD_PAIRED_EDGE_DIAMETER"),
+             _frac(statistics.get("edge_acceptance_fraction")), result.status.value),
+            ("Fathom Field / Raw Profile",
+             result.secondary_distributions.get("FATHOM_FIELD_PROFILE_DIAMETER"),
+             _frac(statistics.get("profile_acceptance_fraction")), result.status.value),
+        ]
+        ribbon_rows = [
+            ("Fathom Field / Ribbon EDT",
+             result.secondary_distributions.get("FATHOM_FIELD_REFINED_EDT_DIAMETER"),
+             _frac(smooth_coverage), "EXPERIMENTAL"),
+            ("Fathom Field / Ribbon Edge",
+             result.secondary_distributions.get("FATHOM_FIELD_REFINED_EDGE_DIAMETER"),
+             _frac(statistics.get("refined_edge_acceptance_fraction")), "EXPERIMENTAL"),
+            ("Fathom Field / Ribbon Profile",
+             result.secondary_distributions.get("FATHOM_FIELD_REFINED_PROFILE_DIAMETER"),
+             _frac(statistics.get("refined_profile_acceptance_fraction")), "EXPERIMENTAL"),
+        ]
+        rows: list[tuple[str, ...]] = []
+        for name, distribution, coverage, status in raw_rows + ribbon_rows:
+            if distribution is None:
+                rows.append((name, status, "—", coverage, "—", "—", "—", "—", "—"))
+                continue
+            summary = summarize_distribution(distribution)
+            rows.append(
+                (
+                    name,
+                    status,
+                    str(summary.n),
+                    coverage,
+                    _fmt(summary.weighted_mean),
+                    _fmt(summary.weighted_median),
+                    _fmt_range(summary.p25, summary.p75),
+                    _fmt(summary.p05),
+                    _fmt(summary.p95),
+                )
+            )
+        return rows
+
     @staticmethod
     def _result_row(result: MethodResult) -> tuple[str, ...]:
         distribution = result.common_distribution
@@ -303,13 +362,14 @@ class SummaryPanel(QWidget):
                     if result.native_result is not None
                     else "—"
                 )
-                return (method_display_name(result.method_id), result.status.value, "—", "Native b1: " + value, "—", "—", "—", "—")
-            return (method_display_name(result.method_id), result.status.value, "—", "—", "—", "—", "—", "—")
+                return (method_display_name(result.method_id), result.status.value, "—", "—", "Native b1: " + value, "—", "—", "—", "—")
+            return (method_display_name(result.method_id), result.status.value, "—", "—", "—", "—", "—", "—", "—")
         summary = summarize_distribution(distribution)
         return (
             method_display_name(result.method_id),
             result.status.value,
             str(summary.n),
+            "—",
             _fmt(summary.weighted_mean),
             _fmt(summary.weighted_median),
             _fmt_range(summary.p25, summary.p75),
@@ -420,6 +480,7 @@ class FieldSamplesModel(QAbstractTableModel):
         "ID", "x (µm)", "y (µm)", "d_EDT (µm)", "d_edge (µm)", "d_profile (µm)",
         "r− (µm)", "r+ (µm)", "asymmetry", "coherence", "profile conf.", "arc weight (µm)",
         "status", "flags",
+        "refined EDT", "refined Edge", "refined Profile", "residual shift", "refinement", "segment",
     )
 
     def __init__(self, parent=None) -> None:
@@ -494,6 +555,20 @@ class FieldSamplesModel(QAbstractTableModel):
         if column == 13:
             flags = self.get("edge_flags")
             return flags[row] if flags.size else "—"
+        if column == 14:
+            return _fmt(self.get("refined_edt_um")[row])
+        if column == 15:
+            return _fmt(self.get("refined_edge_um")[row])
+        if column == 16:
+            return _fmt(self.get("refined_profile_um")[row])
+        if column == 17:
+            return _fmt(self.get("residual_center_shift_um")[row])
+        if column == 18:
+            refined = self.get("refined_mask")
+            return "refined" if refined.size and refined[row] else "—"
+        if column == 19:
+            segment = self.get("segment_id")
+            return str(segment[row]) if segment.size and segment[row] >= 0 else "—"
         return None
 
 
@@ -725,10 +800,16 @@ class QualityPanel(QWidget):
         )
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.ribbon_table = QTableWidget(0, 2)
+        self.ribbon_table.setHorizontalHeaderLabels(["Oriented Ribbon V1", "Value"])
+        self.ribbon_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.ribbon_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.ribbon_table.setVisible(False)
         self.flags = QTextBrowser()
         self.flags.setMinimumHeight(160)
         layout = QVBoxLayout(self)
         layout.addWidget(self.table, 1)
+        layout.addWidget(self.ribbon_table)
         layout.addWidget(self.flags, 1)
 
     def set_comparison(self, comparison: UnifiedMethodComparison | None) -> None:
@@ -746,7 +827,50 @@ class QualityPanel(QWidget):
                     item.setForeground(QColor(_status_color(value)))
                 self.table.setItem(row_index, column, item)
         self.table.resizeColumnsToContents()
+        self._set_ribbon_rows(comparison)
         self.flags.setHtml(flag_sections or "<p>No flags recorded.</p>")
+
+    def _set_ribbon_rows(self, comparison: UnifiedMethodComparison | None) -> None:
+        field = None
+        if comparison is not None:
+            field = next(
+                (
+                    result
+                    for result in comparison.results
+                    if result.method_id == MethodId.FATHOM_FIELD_GRAPH_V1
+                ),
+                None,
+            )
+        if field is None:
+            self.ribbon_table.setVisible(False)
+            self.ribbon_table.setRowCount(0)
+            return
+        statistics = field.native_statistics
+
+        def row(label: str, value: str) -> None:
+            rows.append((label, value))
+
+        rows: list[tuple[str, str]] = []
+        row("Observation coverage", _frac(statistics.get("refine_coverage_fraction")))
+        row(
+            "Supported centerline coverage",
+            _frac(statistics.get("smooth_coverage_fraction")),
+        )
+        row("Original center shift · median", _fmt(statistics.get("refine_median_shift_um")) + " µm")
+        row("Original center shift · P90", _fmt(statistics.get("refine_p90_shift_um")) + " µm")
+        row("Residual center shift · median", _fmt(statistics.get("refined_residual_shift_median_um")) + " µm")
+        row("Residual center shift · P90", _fmt(statistics.get("refined_residual_shift_p90_um")) + " µm")
+        row("Asymmetry raw → refined", _fmt(statistics.get("edge_median_asymmetry"), 4) + " → " + _fmt(statistics.get("refined_asymmetry_median"), 4))
+        row("Edge acceptance raw → refined", _frac(statistics.get("edge_acceptance_fraction")) + " → " + _frac(statistics.get("refined_edge_acceptance_fraction")))
+        row("Profile acceptance raw → refined", _frac(statistics.get("profile_acceptance_fraction")) + " → " + _frac(statistics.get("refined_profile_acceptance_fraction")))
+        row("Refinement segments", str(statistics.get("smooth_segment_count", "—")))
+        ribbon_flags = [flag for flag in field.quality_flags if flag not in {"EXPERIMENTAL_FIELD_MEASURING", "FIELD_STAGE_IMPLEMENTED", "GRAPH_STAGE_NOT_IMPLEMENTED", "SMOOTH_CENTERLINE_V1", "REFINED_REMEASUREMENT"}]
+        row("Flags", ", ".join(ribbon_flags) or "—")
+        self.ribbon_table.setRowCount(len(rows))
+        for row_index, (label, value) in enumerate(rows):
+            self.ribbon_table.setItem(row_index, 0, QTableWidgetItem(label))
+            self.ribbon_table.setItem(row_index, 1, QTableWidgetItem(value))
+        self.ribbon_table.setVisible(True)
 
     @staticmethod
     def _result_row(result: MethodResult) -> tuple[str, ...]:
@@ -1022,13 +1146,47 @@ class WorkspaceInspector(QWidget):
                 return None
             return float(np.asarray(array).reshape(-1)[index])
 
+        def value_str(key: str) -> str:
+            array = samples.get(key)
+            if array is None or not np.asarray(array).size:
+                return "—"
+            return str(np.asarray(array).reshape(-1)[index])
+
         x_m, y_m = value("x_m"), value("y_m")
         coherence = value("coherence")
         edge_accepted = value("edge_accepted")
-        edge_flags = str(np.asarray(samples.get("edge_flags"), dtype=str).reshape(-1)[index]) if samples.get("edge_flags") is not None else ""
-        profile_flags = str(np.asarray(samples.get("profile_flags"), dtype=str).reshape(-1)[index]) if samples.get("profile_flags") is not None else ""
+        edge_flags = value_str("edge_flags")
+        profile_flags = value_str("profile_flags")
         qx, qy = value("qx"), value("qy")
         theta = 0.5 * np.arctan2(qy, qx) if qx is not None and qy is not None else None
+        refined_mask = value("refined_mask")
+        refined_x, refined_y = value("refined_x_m"), value("refined_y_m")
+        segment_id = value("segment_id")
+        observed_shift = value("center_shift_um")
+        residual_shift = value("residual_center_shift_um")
+        residual_normal = value("residual_normal_shift_um")
+        residual_tangent = value("residual_tangential_shift_um")
+        refine_confidence = value("refine_confidence")
+        axis_disagreement = value("refined_axis_disagreement_deg")
+        refined_edge_accepted = value("refined_edge_accepted")
+        refined_flags = value_str("refined_edge_flags")
+
+        is_refined = bool(refined_mask) if refined_mask is not None else False
+        refinement_rows = [
+            ("Status", "Refined" if is_refined else "Not refined"),
+            ("Segment ID", str(int(segment_id)) if segment_id is not None and segment_id >= 0 else "—"),
+            ("Original center", f"x {x_m * 1e6:.4g} µm · y {y_m * 1e6:.4g} µm" if x_m is not None else "—"),
+            ("Refined center", f"x {refined_x * 1e6:.4g} µm · y {refined_y * 1e6:.4g} µm" if is_refined and refined_x is not None else "—"),
+            ("Observed shift", f"{_fmt(observed_shift)} µm"),
+            ("Residual shift", f"{_fmt(residual_shift)} µm"),
+            ("Residual normal", f"{_fmt(residual_normal)} µm"),
+            ("Residual tangential", f"{_fmt(residual_tangent)} µm"),
+            ("Shift / local diameter", _fmt(observed_shift / value("edge_diameter_um"), 4) if observed_shift is not None and value("edge_diameter_um") else "—"),
+            ("Refinement confidence", _fmt(refine_confidence, 4)),
+            ("Orientation disagreement", f"{_fmt(axis_disagreement, 4)}°"),
+            ("Refined edge status", "accepted" if refined_edge_accepted else "rejected" if refined_edge_accepted is not None else "—"),
+            ("Refined flags", refined_flags.replace(";", " · ") or "—"),
+        ]
 
         rows = [
             ("Position", f"x {x_m * 1e6:.4g} µm · y {y_m * 1e6:.4g} µm" if x_m is not None else "—"),
@@ -1049,7 +1207,25 @@ class WorkspaceInspector(QWidget):
             ("Edge shift plus", f"{_fmt(value('profile_plus_shift_um'))} µm"),
             ("Suggested center shift", f"{_fmt(value('suggested_center_shift_um'))} µm"),
         ]
-        self.selection.setHtml(_table(rows))
+        self.selection.setHtml(
+            _table(rows)
+            + "<h3 style='font-size:12px;margin:.2em 0'>CENTERLINE REFINEMENT</h3>"
+            + _table(refinement_rows)
+            + "<h3 style='font-size:12px;margin:.2em 0'>RAW VS REFINED WIDTHS</h3>"
+            + "<table><tr><th></th><th>Raw</th><th>Refined</th></tr>"
+            + "<tr><td>EDT</td><td>" + _fmt(value("diameter_um")) + " µm</td><td>"
+            + _fmt(value("refined_edt_um")) + " µm</td></tr>"
+            + "<tr><td>Edge</td><td>" + _fmt(value("edge_diameter_um")) + " µm</td><td>"
+            + _fmt(value("refined_edge_um")) + " µm</td></tr>"
+            + "<tr><td>Profile</td><td>" + _fmt(value("profile_diameter_um")) + " µm</td><td>"
+            + _fmt(value("refined_profile_um")) + " µm</td></tr>"
+            + "<tr><td>r−</td><td>" + _fmt(value("radius_minus_um")) + " µm</td><td>"
+            + _fmt(value("refined_r_minus_um")) + " µm</td></tr>"
+            + "<tr><td>r+</td><td>" + _fmt(value("radius_plus_um")) + " µm</td><td>"
+            + _fmt(value("refined_r_plus_um")) + " µm</td></tr>"
+            + "<tr><td>Asymmetry</td><td>" + _fmt(value("edge_asymmetry"), 4) + "</td><td>"
+            + _fmt(value("refined_asymmetry"), 4) + "</td></tr></table>"
+        )
         measurement_rows = [
             ("d_EDT", _fmt(value("diameter_um")), "µm"),
             ("d_edge (paired)", _fmt(value("edge_diameter_um")), "µm"),
@@ -1104,6 +1280,10 @@ def _fmt(value: float | None, digits: int = 5) -> str:
     return "—" if value is None else f"{value:.{digits}g}"
 
 
+def _frac(value: float | None) -> str:
+    return "—" if value is None else f"{value:.1%}"
+
+
 def _fmt_range(low: float | None, high: float | None) -> str:
     if low is None or high is None:
         return "—"
@@ -1130,9 +1310,31 @@ class DistributionsPanel(QWidget):
         "Fathom Field (EDT)",
         "Field Paired Edge",
         "Field Intensity Profile",
+        "Ribbon Refined EDT",
+        "Ribbon Refined Edge",
+        "Ribbon Refined Profile",
         "Manual 5×5",
         "Consensus",
     )
+
+    PRESETS: ClassVar[dict[str, frozenset[str]]] = {
+        "ALL METHODS": frozenset(),
+        "FIELD RAW": frozenset({"Fathom Field (EDT)", "Field Paired Edge", "Field Intensity Profile"}),
+        "FIELD RIBBON": frozenset({"Ribbon Refined EDT", "Ribbon Refined Edge", "Ribbon Refined Profile"}),
+        "RAW vs REFINED EDT": frozenset({"Fathom Field (EDT)", "Ribbon Refined EDT"}),
+        "RAW vs REFINED EDGE": frozenset({"Field Paired Edge", "Ribbon Refined Edge"}),
+        "RAW vs REFINED PROFILE": frozenset({"Field Intensity Profile", "Ribbon Refined Profile"}),
+        "MANUAL COMPARISON": frozenset(
+            {
+                "Manual 5×5",
+                "Python SIMPoly",
+                "Fathom Local",
+                "Ribbon Refined EDT",
+                "Ribbon Refined Edge",
+                "Ribbon Refined Profile",
+            }
+        ),
+    }
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -1142,6 +1344,11 @@ class DistributionsPanel(QWidget):
         controls = QHBoxLayout()
         controls.addWidget(QLabel("Series"))
         controls.addWidget(self.series_combo)
+        controls.addWidget(QLabel("Preset"))
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItems(list(self.PRESETS))
+        self.preset_combo.setCurrentText("ALL METHODS")
+        controls.addWidget(self.preset_combo)
         self.matlab_note = QLabel("")
         self.matlab_note.setStyleSheet("color: #8a6d1a;")
         self.matlab_note.setWordWrap(True)
@@ -1176,6 +1383,7 @@ class DistributionsPanel(QWidget):
         layout.addLayout(plots, 1)
         layout.addWidget(tabs, 1)
         self.series_combo.currentTextChanged.connect(self._refresh_plots)
+        self.preset_combo.currentTextChanged.connect(self._preset_changed)
 
     def set_comparison(self, comparison: UnifiedMethodComparison | None) -> None:
         self.comparison = comparison
@@ -1207,8 +1415,22 @@ class DistributionsPanel(QWidget):
             return self._all_series()
         return [(name, distribution) for name, distribution in self._all_series() if name == choice]
 
-    def _refresh_plots(self, *_args) -> None:
-        series = self._selected_series()
+    def _preset_changed(self, preset: str) -> None:
+        names = self.PRESETS.get(preset)
+        if not names:
+            self.series_combo.setCurrentText("All")
+            return
+        self._refresh_plots(preset=set(names))
+
+    def _refresh_plots(self, *_args, preset: set[str] | None = None) -> None:
+        if preset is not None:
+            series = [
+                (name, distribution)
+                for name, distribution in self._all_series()
+                if name in preset
+            ]
+        else:
+            series = self._selected_series()
         self.histogram.set_series(series)
         self.ecdf.set_series(series)
         self._refresh_tables(series)

@@ -64,6 +64,63 @@ def build_overlay_payload(
             samples = field.local_samples
             x_px = np.asarray(samples["x_m"], float) / px
             y_px = np.asarray(samples["y_m"], float) / py
+            payload["raw_centerline"] = {
+                "x": x_px,
+                "y": y_px,
+                "accepted": np.asarray(samples["edge_accepted"], bool),
+            }
+            refined = None
+            if "refined_x_m" in samples and "refined_y_m" in samples:
+                refined = np.column_stack(
+                    (np.asarray(samples["refined_x_m"], float) / px, np.asarray(samples["refined_y_m"], float) / py)
+                )
+            refined_mask = (
+                np.asarray(samples["refined_mask"], bool)
+                if "refined_mask" in samples
+                else None
+            )
+            segment_ids = samples.get("segment_id")
+            if refined is not None:
+                payload["refined_centerline"] = {
+                    "xy": refined,
+                    "mask": refined_mask,
+                    "segment_ids": segment_ids,
+                }
+            if "midpoint_preferred_x_m" in samples and "midpoint_preferred_y_m" in samples:
+                payload["midpoints"] = {
+                    "x": np.asarray(samples["midpoint_preferred_x_m"], float) / px,
+                    "y": np.asarray(samples["midpoint_preferred_y_m"], float) / py,
+                    "accepted": np.asarray(samples["refine_accepted"], bool)
+                    if "refine_accepted" in samples
+                    else None,
+                }
+            if refined is not None and refined_mask is not None:
+                normal = np.asarray(samples["refined_normal_xy"], float)
+                r_minus = np.asarray(samples["refined_r_minus_um"], float) * 1e-6
+                r_plus = np.asarray(samples["refined_r_plus_um"], float) * 1e-6
+                minus_pos = refined - r_minus[:, None] * normal
+                plus_pos = refined + r_plus[:, None] * normal
+                refined_accepted = (
+                    np.asarray(samples["refined_edge_accepted"], bool)
+                    if "refined_edge_accepted" in samples
+                    else None
+                )
+                payload["refined_edges"] = {
+                    "x1": minus_pos[:, 0] / px,
+                    "y1": minus_pos[:, 1] / py,
+                    "x2": plus_pos[:, 0] / px,
+                    "y2": plus_pos[:, 1] / py,
+                    "mask": refined_mask,
+                    "accepted": refined_accepted,
+                }
+                payload["rejected_refined"] = {
+                    "x": refined[~refined_mask, 0] / px if np.any(~refined_mask) else np.array([]),
+                    "y": refined[~refined_mask, 1] / py if np.any(~refined_mask) else np.array([]),
+                }
+        if field.local_samples is not None:
+            samples = field.local_samples
+            x_px = np.asarray(samples["x_m"], float) / px
+            y_px = np.asarray(samples["y_m"], float) / py
             accepted = np.asarray(samples["edge_accepted"], bool)
             flags = np.asarray(samples["edge_flags"], dtype=str) if "edge_flags" in samples else None
             rejected = ~accepted
@@ -115,10 +172,15 @@ class OverlayLayers:
         "mask",
         "skeleton",
         "centerline",
+        "raw_centerline",
+        "refined_centerline",
+        "midpoints",
         "orientation",
         "edges",
+        "refined_edges",
         "profile",
         "rejected",
+        "rejected_refined",
         "local_sections",
     )
 
@@ -133,10 +195,15 @@ class OverlayLayers:
             "skeleton": 5,
             "centerline": 6,
             "local_sections": 7,
-            "orientation": 8,
-            "edges": 9,
-            "profile": 10,
-            "rejected": 11,
+            "raw_centerline": 8,
+            "refined_centerline": 9,
+            "midpoints": 10,
+            "orientation": 11,
+            "edges": 12,
+            "refined_edges": 13,
+            "profile": 14,
+            "rejected": 15,
+            "rejected_refined": 16,
         }
 
     def set_payload(self, payload: dict[str, Any]) -> None:
@@ -185,6 +252,16 @@ class OverlayLayers:
             return self._build_bool_path(data, QColor(63, 193, 243, 200) if layer == "skeleton" else QColor(255, 216, 102, 210))
         if layer == "local_sections":
             return self._build_sections(data)
+        if layer == "raw_centerline":
+            return self._build_raw_centerline(data)
+        if layer == "refined_centerline":
+            return self._build_refined_centerline(data)
+        if layer == "midpoints":
+            return self._build_midpoints(data)
+        if layer == "refined_edges":
+            return self._build_refined_edges(data)
+        if layer == "rejected_refined":
+            return self._build_rejected_refined(data)
         if layer == "orientation":
             return self._build_orientation(data)
         if layer == "edges":
@@ -274,6 +351,102 @@ class OverlayLayers:
         item = QGraphicsPathItem(path)
         item.setPen(pen)
         item.setZValue(self._z["orientation"])
+        return item
+
+    def _build_raw_centerline(self, data: dict[str, Any]) -> QGraphicsPathItem:
+        x = np.asarray(data["x"], float)
+        y = np.asarray(data["y"], float)
+        step = max(1, x.size // 20000)
+        path = QPainterPath()
+        path.moveTo(x[0], y[0])
+        for index in range(step, x.size, step):
+            path.lineTo(x[index], y[index])
+        pen = QPen(QColor(240, 168, 58, 200), 1.0)
+        pen.setCosmetic(True)
+        item = QGraphicsPathItem(path)
+        item.setPen(pen)
+        item.setZValue(self._z["raw_centerline"])
+        return item
+
+    def _build_refined_centerline(self, data: dict[str, Any]) -> QGraphicsPathItem:
+        xy = np.asarray(data["xy"], float)
+        mask = np.asarray(data.get("mask", np.ones(xy.shape[0], bool)), bool)
+        segment_ids = data.get("segment_ids")
+        path = QPainterPath()
+        if segment_ids is None:
+            positions = xy[mask]
+            if positions.size:
+                path.moveTo(positions[0, 0], positions[0, 1])
+                for index in range(1, positions.shape[0]):
+                    path.lineTo(positions[index, 0], positions[index, 1])
+        else:
+            ids = np.asarray(segment_ids, int)
+            for segment in np.unique(ids[ids >= 0]):
+                selected = mask & (ids == segment)
+                positions = xy[selected]
+                if positions.size < 2:
+                    continue
+                # a new moveTo per segment keeps the intentional gaps
+                path.moveTo(positions[0, 0], positions[0, 1])
+                for index in range(1, positions.shape[0]):
+                    path.lineTo(positions[index, 0], positions[index, 1])
+        pen = QPen(QColor(64, 224, 255, 230), 1.6)
+        pen.setCosmetic(True)
+        item = QGraphicsPathItem(path)
+        item.setPen(pen)
+        item.setZValue(self._z["refined_centerline"])
+        return item
+
+    def _build_midpoints(self, data: dict[str, Any]) -> QGraphicsPathItem:
+        x = np.asarray(data["x"], float)
+        y = np.asarray(data["y"], float)
+        accepted = np.asarray(data.get("accepted", np.ones(x.size, bool)), bool)
+        selected = accepted
+        step = DENSITY_STEP.get(self.density, 5)
+        path = QPainterPath()
+        for index in range(0, x.size, step):
+            if not selected[index] or not np.isfinite(x[index]):
+                continue
+            path.moveTo(x[index] - 1.5, y[index])
+            path.lineTo(x[index] + 1.5, y[index])
+        pen = QPen(QColor(240, 168, 58, 200), 1.4)
+        pen.setCosmetic(True)
+        item = QGraphicsPathItem(path)
+        item.setPen(pen)
+        item.setZValue(self._z["midpoints"])
+        return item
+
+    def _build_refined_edges(self, data: dict[str, Any]) -> QGraphicsPathItem:
+        mask = np.asarray(data.get("mask", np.ones(len(np.asarray(data["x1"])), bool)), bool)
+        accepted = np.asarray(data.get("accepted", mask), bool)
+        path = QPainterPath()
+        for index in range(len(np.asarray(data["x1"]))):
+            if not mask[index] or not accepted[index]:
+                continue
+            path.moveTo(float(data["x1"][index]), float(data["y1"][index]))
+            path.lineTo(float(data["x2"][index]), float(data["y2"][index]))
+        pen = QPen(QColor(68, 160, 255, 210), 1.1)
+        pen.setCosmetic(True)
+        item = QGraphicsPathItem(path)
+        item.setPen(pen)
+        item.setZValue(self._z["refined_edges"])
+        return item
+
+    def _build_rejected_refined(self, data: dict[str, Any]) -> QGraphicsPathItem:
+        x = np.asarray(data["x"], float)
+        y = np.asarray(data["y"], float)
+        step = DENSITY_STEP.get(self.density, 5)
+        path = QPainterPath()
+        for index in range(0, x.size, step):
+            path.moveTo(x[index] - 2.0, y[index] - 2.0)
+            path.lineTo(x[index] + 2.0, y[index] + 2.0)
+            path.moveTo(x[index] + 2.0, y[index] - 2.0)
+            path.lineTo(x[index] - 2.0, y[index] + 2.0)
+        pen = QPen(QColor(150, 110, 160, 200), 1.0)
+        pen.setCosmetic(True)
+        item = QGraphicsPathItem(path)
+        item.setPen(pen)
+        item.setZValue(self._z["rejected_refined"])
         return item
 
     def _build_edges(self, data: dict[str, Any]) -> QGraphicsPathItem:

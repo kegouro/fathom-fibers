@@ -408,12 +408,37 @@ class WorkspaceController(QObject):
         manual = self.manual
 
         def build() -> str:
-            from ..reports import build_dataset_report
+            from ..reports import build_final_dataset_report
 
-            index = build_dataset_report(
-                Path.cwd(), dataset=dataset, manual_store=manual
+            output = self.cache.root.parent / "final-report"
+            index = build_final_dataset_report(
+                Path.cwd(),
+                dataset=dataset,
+                manual_store=manual,
+                output_dir=output,
             )
             return str(index)
+
+        self._launch_report_task(build)
+
+    def export_analysis_bundle(self, directory: str | Path) -> None:
+        """Export the full analysis bundle (report + CSV/JSON + figures)."""
+        if self.dataset is None:
+            self.errorRaised.emit("Export unavailable", "Open a dataset first.")
+            return
+        dataset = self.dataset
+        manual = self.manual
+
+        def build() -> str:
+            from ..export_bundle import export_analysis_bundle
+
+            root = export_analysis_bundle(
+                Path.cwd(),
+                dataset=dataset,
+                manual_store=manual,
+                output_dir=Path(directory),
+            )
+            return str(root)
 
         self._launch_report_task(build)
 
