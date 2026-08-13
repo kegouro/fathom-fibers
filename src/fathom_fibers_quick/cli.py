@@ -65,10 +65,22 @@ def _inventory(directory: str, output: str) -> int:
     return 0
 
 
+def _version_text() -> str:
+    from ._build_info import describe
+
+    return describe()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="fathom-fibers",
         description="Scientific fiber measurement engine and desktop workspace",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=_version_text(),
+        help="Show application version, source commit and platform",
     )
     sub = parser.add_subparsers(dest="command")
 

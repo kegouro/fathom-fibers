@@ -12,4 +12,4 @@ __all__ = [
     "load_image_document",
 ]
 
-__version__ = "0.2.0-experimental"
+__version__ = "0.2.0rc1"

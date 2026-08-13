@@ -859,6 +859,7 @@ def build_image_report(
 
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    _clean_figure_dir(output)
     series = series_distributions(comparison)
     x_max = _primary_x_max(series)
     figure_primary_histogram(series, output, x_max)
@@ -1185,10 +1186,13 @@ def _matlab_card_v2(matlab: MethodResult | None) -> str:
 
 
 def _provenance_v2(comparison: UnifiedMethodComparison, image: Any, matlab: MethodResult | None) -> str:
+    from ._build_info import source_commit
     from .report_style import details, table
 
     rows: list[list[Any]] = [
         ["Image", comparison.image_id],
+        ["Application", "Fathom Fibers"],
+        ["Commit", source_commit()[:12]],
         ["Calibration", f"{image.calibration.pixel_size_x_m * 1e9:.5g} × {image.calibration.pixel_size_y_m * 1e9:.5g} nm/px ({image.calibration.source})"],
         ["Source", str(image.source_path)],
     ]
@@ -1756,6 +1760,7 @@ def build_final_dataset_report(
     repo = Path(repo)
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
+    _clean_figure_dir(output / "images")
     cache = WorkspaceCache(repo)
     if comparisons is None:
         comparisons = []
@@ -2339,6 +2344,21 @@ def _distribution_median(distribution: Any) -> float | None:
     return float(np.median(distribution.diameter))
 
 
+def _clean_figure_dir(directory: Path) -> None:
+    """Remove previously generated report figures so no stale legacy PNG ships.
+
+    Every figure the current report references is regenerated immediately
+    afterwards; files left behind by older report versions are discarded.
+    """
+    if not directory.exists():
+        return
+    for stale in directory.glob("*.png"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+
 def _final_per_image_figures(output: Path, comparison: Any, stem: str) -> None:
     """Per-image figures: primary histogram, ECDF and raw-vs-Ribbon panels."""
     series = series_distributions(comparison)
@@ -2401,17 +2421,10 @@ def _final_provenance(
     cache: WorkspaceCache,
     calibration_audit: list[dict[str, Any]] | None = None,
 ) -> str:
+    from ._build_info import source_commit
     from .report_style import details, table
 
-    try:
-        import subprocess
-
-        commit = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=False,
-        ).stdout.strip()[:12]
-    except Exception:
-        commit = "unknown"
+    commit = source_commit()[:12]
     rows = [
         ["Application", "Fathom Fibers"],
         ["Commit", commit],
