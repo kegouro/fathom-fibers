@@ -26,3 +26,9 @@ local_data/
 build/
 dist/
 release/
+
+# private SEM data protection
+*.tif
+*.tiff
+*.TIF
+*.TIFF

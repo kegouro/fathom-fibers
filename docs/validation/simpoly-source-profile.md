@@ -5,7 +5,7 @@
 The canonical source supplied for this audit is:
 
 ```text
-/home/kegouro/Downloads/sj-m-1-ten-10.1089_ten.tec.2020.0304.m
+<operator-local path to the source .m file>
 SHA-256: 6cbb827ebfa92a2f951d3fd06cb3561d81854ddd8fc4fc9f8f7bb1151ad1f446
 ```
 
