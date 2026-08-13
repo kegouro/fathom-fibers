@@ -165,7 +165,7 @@ def test_user_guide_documentation_exists():
     repo = Path(__file__).resolve().parents[1]
     guide = repo / "docs/USER_GUIDE.md"
     assert guide.exists()
-    text = guide.read_text()
+    text = guide.read_text(encoding="utf-8")
     for section in (
         "Five-minute Quick Start",
         "The normal workflow",

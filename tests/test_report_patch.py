@@ -181,6 +181,8 @@ def test_mixture_histogram_mass_normalized():
 def test_no_methodresult_modified():
     cache = WorkspaceCache(REPO)
     before = cache.load_comparison("PVDF Jose_01")
+    if before is None:
+        pytest.skip("cached comparison not present; run the private campaign first")
     field_before = next(r for r in before.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1)
     median_before = float(np.median(field_before.common_distribution.diameter))
     _dataset, comparisons = _comparisons()
