@@ -51,12 +51,21 @@ def test_oracle_manifest_and_run_contracts():
 
 
 def test_matlab_runner_absent_handling(tmp_path):
+    import shutil
+
     img_path = tmp_path / "dummy.png"
     img_path.write_bytes(b"dummy")
     out_json = tmp_path / "out.json"
 
     res = run_matlab_oracle(img_path, out_json)
-    assert res["status"] in {"SKIPPED_MATLAB_ABSENT", "FAILED_MATLAB_RUNNER"}
+    # With MATLAB absent the runner is skipped; with MATLAB installed a real
+    # batch run on an invalid input must still fail gracefully through the
+    # oracle JSON contract rather than raising.
+    expected = {"SKIPPED_MATLAB_ABSENT", "FAILED_MATLAB_RUNNER", "FAILED"}
+    if shutil.which("matlab") is None:
+        assert res["status"] in expected
+    else:
+        assert res["status"] in {"FAILED_MATLAB_RUNNER", "FAILED"}
     assert out_json.exists()
 
 

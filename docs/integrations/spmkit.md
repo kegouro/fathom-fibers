@@ -5,7 +5,7 @@
 The adapter was designed against the local checkout:
 
 ```text
-/home/kegouro/HIBRIS/Workshop ⁄ Proyectos/SPMKIT ALL/spmkit-core-first-audit
+<operator-local path to the SPMKit checkout>
 commit 149d0e2
 ```
 

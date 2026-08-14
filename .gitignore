@@ -21,3 +21,14 @@ local_data/
 .reference/
 .validation/
 *.zip
+
+# build / release artifacts
+build/
+dist/
+release/
+
+# private SEM data protection
+*.tif
+*.tiff
+*.TIF
+*.TIFF

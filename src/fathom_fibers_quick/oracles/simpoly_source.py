@@ -6,7 +6,17 @@ from enum import Enum
 
 import numpy as np
 from scipy import ndimage, optimize
-from skimage import exposure, feature, filters, morphology
+from skimage import exposure, filters, morphology
+
+from .matlab_compat import (
+    matlab_adapthisteq_compat,
+    matlab_branchpoints_compat,
+    matlab_canny_compat,
+    matlab_closing_compat,
+    matlab_spur_compat,
+    matlab_thicken_compat,
+    matlab_thin_compat,
+)
 
 PROFILE_SOURCE_COMPAT_V1 = "SIMPOLY_SOURCE_COMPAT_V1"
 PROFILE_CONTROLLED_INPUT_V1 = "SIMPOLY_CONTROLLED_INPUT_V1"
@@ -24,6 +34,8 @@ class ParityClassification(str, Enum):
     BITWISE_PARITY = "BITWISE_PARITY"
     NUMERICAL_PARITY = "NUMERICAL_PARITY"
     CROSS_VALIDATED_WITH_TOLERANCE = "CROSS_VALIDATED_WITH_TOLERANCE"
+    KNOWN_LIBRARY_DIVERGENCE = "KNOWN_LIBRARY_DIVERGENCE"
+    UNRESOLVED = "UNRESOLVED"
 
 
 # This is intentionally stage-level rather than one misleading global parity claim.
@@ -31,28 +43,29 @@ class ParityClassification(str, Enum):
 # isolated MATLAB R2026a Update 4 probes and the frozen real-TIFF campaign.
 SIMPOLY_STAGE_PARITY: dict[str, ParityClassification] = {
     "crop_first_channel_footer_90": ParityClassification.BITWISE_PARITY,
-    "adapthisteq": ParityClassification.CROSS_VALIDATED_WITH_TOLERANCE,
+    "adapthisteq": ParityClassification.BITWISE_PARITY,
     "histeq": ParityClassification.BITWISE_PARITY,
     "grayscale_erosion_disk_5": ParityClassification.BITWISE_PARITY,
     "morphological_reconstruction": ParityClassification.BITWISE_PARITY,
-    "canny_0_2_0_4": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "canny_0_2_0_4": ParityClassification.CROSS_VALIDATED_WITH_TOLERANCE,
     "bwareaopen_20": ParityClassification.BITWISE_PARITY,
-    "bwmorph_thicken_1": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "bwmorph_thicken_1": ParityClassification.BITWISE_PARITY,
     "graythresh_plus_0_1_on_ihist": ParityClassification.BITWISE_PARITY,
-    "closing_disk_1": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "imbinarize_strict_threshold_on_ihist": ParityClassification.BITWISE_PARITY,
+    "closing_disk_1": ParityClassification.BITWISE_PARITY,
     "bwmorph_clean_fill_majority": ParityClassification.BITWISE_PARITY,
     "bwmorph_thin_4": ParityClassification.BITWISE_PARITY,
     "median_stop_equal_foreground_count": ParityClassification.BITWISE_PARITY,
-    "bwmorph_thicken_4": ParityClassification.CLOSE_REIMPLEMENTATION,
-    "bwskel": ParityClassification.CLOSE_REIMPLEMENTATION,
-    "branchpoints": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "bwmorph_thicken_4": ParityClassification.BITWISE_PARITY,
+    "bwskel": ParityClassification.KNOWN_LIBRARY_DIVERGENCE,
+    "branchpoints": ParityClassification.BITWISE_PARITY,
     "branch_guard_disk_3": ParityClassification.BITWISE_PARITY,
-    "spur_1": ParityClassification.CLOSE_REIMPLEMENTATION,
+    "spur_1": ParityClassification.BITWISE_PARITY,
     "edge_distance_guard_55_px": ParityClassification.NUMERICAL_PARITY,
     "diameter_map_2x_edt": ParityClassification.NUMERICAL_PARITY,
-    "automatic_histogram": ParityClassification.VERSION_DEPENDENT,
+    "automatic_histogram": ParityClassification.NUMERICAL_PARITY,
     "prepend_two_zeros": ParityClassification.EXACT_SOURCE_RULE,
-    "gauss1_fit": ParityClassification.MATLAB_PARITY_UNVERIFIED,
+    "gauss1_fit": ParityClassification.NUMERICAL_PARITY,
     "main_result_b1": ParityClassification.EXACT_FORMULA,
     "source_stdev_c1_over_2": ParityClassification.EXACT_FORMULA,
 }
@@ -172,56 +185,22 @@ def bwmorph_majority(bw: np.ndarray, iterations: int = 1) -> np.ndarray:
 
 def bwmorph_thin(bw: np.ndarray, iterations: int = 4) -> np.ndarray:
     """Applies thinning iteration."""
-    return morphology.thin(bw, max_num_iter=iterations)
+    return matlab_thin_compat(bw, iterations)
 
 
 def bwmorph_thicken(bw: np.ndarray, iterations: int = 4) -> np.ndarray:
     """MATLAB-compatible dual thinning without finite-image border artifacts."""
-    if iterations <= 0:
-        return np.asarray(bw, dtype=bool).copy()
-    # MATLAB treats the outside of BW as background.  Taking the complement on
-    # an unpadded finite array incorrectly turns its border into foreground.
-    pad = max(8, 2 * iterations)
-    padded = np.pad(np.asarray(bw, dtype=bool), pad, mode="constant")
-    result = ~morphology.thin(~padded, max_num_iter=iterations)
-    return result[pad:-pad, pad:-pad]
+    return matlab_thicken_compat(bw, iterations)
 
 
 def bwmorph_branchpoints(skel: np.ndarray) -> np.ndarray:
     """Apply the exhaustive R2026a ``branchpoints`` 3x3 lookup table."""
-    packed = bytes.fromhex(
-        "000000600000287e000068540000fe5d000068fe0000feff00007e740000ff7f"
-        "000068fe00000e4f0000fefd0000ef4d00007eff00002e7f0000207400002e84"
-    )
-    lut = np.unpackbits(np.frombuffer(packed, dtype=np.uint8), bitorder="little").astype(bool)
-    source = np.asarray(skel, dtype=bool)
-    windows = np.lib.stride_tricks.sliding_window_view(np.pad(source, 1), (3, 3))
-    codes = np.zeros(source.shape, dtype=np.uint16)
-    for row in range(3):
-        for column in range(3):
-            codes |= windows[:, :, row, column].astype(np.uint16) << (row + 3 * column)
-    return lut[codes]
+    return matlab_branchpoints_compat(skel)
 
 
 def bwmorph_spur(skel: np.ndarray, iterations: int = 1) -> np.ndarray:
     """Remove MATLAB-style endpoints for the requested number of iterations."""
-    res = skel.copy().astype(bool)
-    for _ in range(iterations):
-        north = np.pad(res, 1)[:-2, 1:-1]
-        south = np.pad(res, 1)[2:, 1:-1]
-        west = np.pad(res, 1)[1:-1, :-2]
-        east = np.pad(res, 1)[1:-1, 2:]
-        nw = np.pad(res, 1)[:-2, :-2]
-        ne = np.pad(res, 1)[:-2, 2:]
-        sw = np.pad(res, 1)[2:, :-2]
-        se = np.pad(res, 1)[2:, 2:]
-        cardinal = north.astype(int) + south + west + east
-        diagonal = nw.astype(int) + ne + sw + se
-        endpoints = res & ((cardinal == 1) | ((cardinal == 0) & (diagonal == 1)))
-        if not np.any(endpoints):
-            break
-        res[endpoints] = False
-    return res
+    return matlab_spur_compat(skel, iterations)
 
 
 # --- MATLAB Histogram & Gaussian Fit Reimplementation ---
@@ -241,19 +220,19 @@ def fit_matlab_gauss1(
     max_idx = int(np.argmax(y))
     p0_a1 = float(y[max_idx])
     p0_b1 = float(x[max_idx])
-    p0_c1 = float(np.std(x)) if np.std(x) > 0 else 5.0
+    p0_c1 = max(float(np.std(x)), float(np.ptp(x)) / 4.0, np.finfo(float).eps)
 
     def gauss1_fn(x_val: np.ndarray, a1: float, b1: float, c1: float) -> np.ndarray:
-        return a1 * np.exp(-(((x_val - b1) / max(c1, 1e-3)) ** 2))
+        return a1 * np.exp(-(((x_val - b1) / c1) ** 2))
 
     try:
         popt, _ = optimize.curve_fit(
             gauss1_fn,
             x,
             y,
-            p0=[p0_a1, p0_b1, max(p0_c1, 1.0)],
-            bounds=([0.0, 0.1, 0.1], [np.inf, np.inf, np.inf]),
-            maxfev=2000,
+            p0=[p0_a1, p0_b1, p0_c1],
+            bounds=([-np.inf, -np.inf, 0.0], [np.inf, np.inf, np.inf]),
+            maxfev=20000,
         )
         return float(popt[0]), float(popt[1]), float(abs(popt[2]))
     except (RuntimeError, ValueError, TypeError):
@@ -261,6 +240,29 @@ def fit_matlab_gauss1(
 
 
 DEFAULT_SIMPOLY_SOURCE_CONFIG = SIMPolySourceConfig()
+
+
+def _matlab_nice_bin_width(width: float) -> float:
+    power = 10.0 ** math.floor(math.log10(width))
+    choices = np.asarray([1.0, 2.0, 3.0, 5.0, 10.0]) * power
+    return float(choices[np.argmin(np.abs(choices - width))])
+
+
+def _matlab_histogram_auto(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """R2026a numeric ``histogram``/``histcounts`` automatic Scott bins."""
+    data = np.asarray(values, dtype=np.float64).ravel()
+    if data.size == 0:
+        return np.array([], dtype=np.int64), np.array([], dtype=np.float64)
+    if np.all(data == data[0]):
+        edges = np.asarray([data[0] - 0.5, data[0] + 0.5], dtype=np.float64)
+    else:
+        raw_width = 3.5 * float(np.std(data, ddof=1)) * data.size ** (-1.0 / 3.0)
+        width = _matlab_nice_bin_width(raw_width)
+        first = math.floor(float(data.min()) / width) * width
+        last = math.ceil(float(data.max()) / width) * width
+        edges = np.arange(first, last + width * 0.5, width, dtype=np.float64)
+    counts, edges = np.histogram(data, bins=edges)
+    return counts, edges
 
 
 def _as_matlab_unit_interval(image: np.ndarray) -> np.ndarray:
@@ -275,6 +277,11 @@ def _as_matlab_unit_interval(image: np.ndarray) -> np.ndarray:
     if result.size and (float(np.nanmin(result)) < 0.0 or float(np.nanmax(result)) > 1.0):
         raise ValueError("Floating-point MATLAB image input must lie in [0, 1]")
     return result
+
+
+def _matlab_imbinarize(image: np.ndarray, level: float) -> np.ndarray:
+    """Apply MATLAB's foreground rule: values strictly above the threshold."""
+    return np.asarray(image) > level
 
 
 def _quantize_like_matlab_image(values: np.ndarray, dtype: np.dtype) -> np.ndarray:
@@ -421,11 +428,14 @@ def run_simpoly_source_pipeline(
     # Step 2 & 3. Contrast Enhancement: adapthisteq + histeq
     norm_crop = _as_matlab_unit_interval(I_crop)
 
-    # MATLAB's default is 8x8 *tiles*, not an 8-pixel kernel.  scikit-image's
-    # default kernel derives the same tile count; interpolation remains a close
-    # reimplementation and is quantified by the R2026a oracle.
-    I_clahe = exposure.equalize_adapthist(norm_crop, kernel_size=None, clip_limit=0.01, nbins=256)
-    I_clahe = _quantize_like_matlab_image(I_clahe, I_crop.dtype)
+    if I_crop.dtype in (np.dtype(np.uint8), np.dtype(np.uint16)):
+        I_clahe = _as_matlab_unit_interval(matlab_adapthisteq_compat(I_crop))
+    else:
+        # The canonical Zeiss profile is uint8. Floating MATLAB input remains
+        # an explicitly unverified fallback rather than silently coercing class.
+        I_clahe = exposure.equalize_adapthist(
+            norm_crop, kernel_size=None, clip_limit=0.01, nbins=256
+        )
     I_equalized = _matlab_histeq_default(I_clahe, I_crop.dtype)
 
     # Step 4 & 5. Grayscale erosion & Morphological Reconstruction
@@ -438,8 +448,10 @@ def run_simpoly_source_pipeline(
     I_reconstructed = morphology.reconstruction(marker, I_equalized)
 
     # Step 6 & 7. Canny Edge Detection & Small edge removal
-    canny_edges = feature.canny(
-        I_reconstructed, low_threshold=config.canny_low, high_threshold=config.canny_high
+    canny_edges = matlab_canny_compat(
+        I_reconstructed,
+        low_threshold=config.canny_low,
+        high_threshold=config.canny_high,
     )
     canny_clean = _bwareaopen_4_connected(canny_edges, config.minimum_edge_area)
 
@@ -449,10 +461,12 @@ def run_simpoly_source_pipeline(
     # Step 9 & 10. Otsu threshold computed from original cropped image I + 0.1, applied to I_equalized
     thresh_val = _matlab_graythresh(norm_crop, I_crop.dtype) + 0.1
     thresh_val = min(max(thresh_val, 0.0), 1.0)
-    BW_threshold = I_equalized >= thresh_val
+    BW_threshold = _matlab_imbinarize(I_equalized, thresh_val)
 
     # Step 11. Closing disk radius 1
-    BW_closed = morphology.closing(BW_threshold, morphology.disk(config.closing_disk_radius))
+    BW_closed = matlab_closing_compat(
+        BW_threshold, morphology.disk(config.closing_disk_radius)
+    )
 
     # Step 12–15. bwmorph sequence: clean, fill, majority, thin x4
     BW_clean = bwmorph_clean(BW_closed, 100000)
@@ -648,7 +662,7 @@ def run_simpoly_source_pipeline(
     if conversion is not None and conversion <= 0:
         raise ValueError("conversion_um_per_px must be positive when provided")
     reported_diameters = diameters * conversion if conversion is not None else diameters
-    counts, edges = np.histogram(reported_diameters, bins="auto")
+    counts, edges = _matlab_histogram_auto(reported_diameters)
     first_edge = edges[0]
 
     y_fit = np.concatenate(([0.0, 0.0], counts.astype(np.float64)))

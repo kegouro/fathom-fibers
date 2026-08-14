@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fathom-fibers-quick"
-version = "0.1.0"
+version = "0.2.0rc1"
 description = "Scientific fiber measurement engine and PySide6 desktop workspace"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gui = ["PySide6>=6.8"]
+gui = ["PySide6>=6.8", "matplotlib>=3.8"]
 validation = ["matplotlib>=3.8"]
 spmkit = ["spmkit>=0.1.5.dev0"]
 dev = ["pytest>=8", "pytest-qt>=4.4", "ruff>=0.6"]

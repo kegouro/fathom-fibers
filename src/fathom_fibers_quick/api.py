@@ -25,6 +25,13 @@ from .measurement_geometry import (
     compute_profile_geometry,
 )
 from .measurement_records import MeasurementKind, MeasurementRecord
+from .methods import (
+    classical_field_adapter,
+    fathom_local_adapter,
+    manual_adapter,
+    matlab_simpoly_cached_adapter,
+    python_simpoly_adapter_with_intermediates,
+)
 from .model import Calibration
 from .oracles.simpoly_source import (
     PROFILE_CONTROLLED_INPUT_V1,
@@ -33,6 +40,7 @@ from .oracles.simpoly_source import (
     SIMPolySourceResult,
     run_simpoly_source_pipeline,
 )
+from .unified_comparison import UnifiedMethodComparison, compare_method_results
 from .zeiss import detect_footer, load_image_document
 
 
@@ -102,7 +110,9 @@ class FathomEngine:
         detect_footer_band: bool = False,
     ) -> ScientificImage:
         pixels, gray = _gray_from_array(np.asarray(array))
-        detected = detect_footer(gray) if detect_footer_band and footer_bounds is None else footer_bounds
+        detected = (
+            detect_footer(gray) if detect_footer_band and footer_bounds is None else footer_bounds
+        )
         return ScientificImage(
             pixels=pixels,
             gray=gray,
@@ -151,7 +161,9 @@ class FathomEngine:
         else:
             raise ValueError(f"Interactive measurement kind is unsupported: {kind.value}")
         record = MeasurementRecord("preview", kind, "preview", geometry=geom, values=values)
-        return ScientificMeasurement(kind, geom, values, record.primary_value, record.primary_unit, flags)
+        return ScientificMeasurement(
+            kind, geom, values, record.primary_value, record.primary_unit, flags
+        )
 
     def run_fathom(
         self,
@@ -241,7 +253,9 @@ class FathomEngine:
             median = float(np.median(values)) if len(values) else None
             difference = main - baseline if main is not None and baseline is not None else None
             relative = (
-                100.0 * difference / baseline if difference is not None and baseline not in {None, 0.0} else None
+                100.0 * difference / baseline
+                if difference is not None and baseline not in {None, 0.0}
+                else None
             )
             return MethodComparisonRow(
                 method,
@@ -263,10 +277,52 @@ class FathomEngine:
                 simpoly.gaussian_center_px,
                 simpoly.flags,
             ),
-            row("FATHOM", "LOCAL_SECTION_WEIGHTED", candidate_px, float(np.median(candidate_px)) if candidate_px else None),
-            row("MANUAL", "MANUAL_ACCEPTED_SECTIONS", manual_px, float(np.mean(manual_px)) if manual_px else None),
+            row(
+                "FATHOM",
+                "LOCAL_SECTION_WEIGHTED",
+                candidate_px,
+                float(np.median(candidate_px)) if candidate_px else None,
+            ),
+            row(
+                "MANUAL",
+                "MANUAL_ACCEPTED_SECTIONS",
+                manual_px,
+                float(np.mean(manual_px)) if manual_px else None,
+            ),
         )
         return MethodComparisonResult(roi, rows, simpoly, intermediates, fathom)
+
+    def compare_all_methods(
+        self,
+        image: ScientificImage,
+        *,
+        roi_bbox: tuple[int, int, int, int] | None = None,
+        manual_measurements: Sequence[MeasurementRecord] = (),
+        matlab_cache_root: str | Path | None = None,
+    ) -> UnifiedMethodComparison:
+        """Compare independent outputs on an explicit common estimand.
+
+        MATLAB data are consumed only from a validated cache; this call never
+        launches MATLAB or changes any scientific-method parameters.
+        """
+        python_result, intermediates = python_simpoly_adapter_with_intermediates(
+            self, image, roi_bbox=roi_bbox
+        )
+        return compare_method_results(
+            (
+                matlab_simpoly_cached_adapter(
+                    image, roi_bbox=roi_bbox, cache_root=matlab_cache_root
+                ),
+                python_result,
+                fathom_local_adapter(self, image, roi_bbox=roi_bbox),
+                classical_field_adapter(
+                    image,
+                    roi_bbox=roi_bbox,
+                    mask=intermediates.thickened_mask,
+                ),
+                manual_adapter(image, manual_measurements, roi_bbox=roi_bbox),
+            )
+        )
 
 
 __all__ = ["FathomEngine", "ScientificImage", "ScientificMeasurement"]

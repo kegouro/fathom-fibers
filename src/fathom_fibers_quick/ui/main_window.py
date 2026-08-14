@@ -3,9 +3,9 @@ from __future__ import annotations
 import copy
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
-from PySide6.QtCore import Qt, QThreadPool, QTimer
+from PySide6.QtCore import QRectF, QSettings, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -16,21 +16,28 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QSlider,
+    QStackedWidget,
     QTabWidget,
     QToolBar,
+    QVBoxLayout,
     QWidget,
 )
 
 from ..api import FathomEngine
 from ..application import ProjectSession
 from ..autosave import perform_atomic_autosave
-from ..core.contracts import FathomAnalysisResult, MethodComparisonResult
+from ..core.contracts import FathomAnalysisResult, MethodComparisonResult, ScientificImage
+from ..core.methods import MethodId
 from ..exporters import export_csv
-from ..measurement_records import MeasurementStatus
+from ..measurement_records import MeasurementRecord, MeasurementStatus
 from ..oracles.simpoly_source import PROFILE_CONTROLLED_INPUT_V1, PROFILE_SOURCE_COMPAT_V1
 from ..project_io import SourceVerificationStatus, verify_project_source
+from ..unified_comparison import UnifiedMethodComparison
 from .commands import HistoryBridge
+from .help import PAGE_METHODS, PAGE_QUICK_START, PAGE_SHORTCUTS, PAGE_USER_GUIDE, HelpDialog
+from .overlays import OverlayLayers, build_overlay_payload
 from .tasks import AnalysisTask
 from .widgets import (
     AnalysisPanel,
@@ -42,8 +49,30 @@ from .widgets import (
 )
 from .widgets.image_viewer import ScientificImageView
 from .widgets.panels import HistoryPanel
+from .widgets.workspace_panels import (
+    DatasetPanel,
+    DistributionsPanel,
+    ImageSummaryPanel,
+    Manual5x5Panel,
+    MeasurementsPanel,
+    MethodsOverviewDialog,
+    MethodsPanel,
+    OverlayPanel,
+    QualityPanel,
+    ReportHeaderPanel,
+    RunMethodsDialog,
+    SummaryPanel,
+    WorkspaceInspector,
+)
+from .workspace_controller import WorkspaceController
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_DATASET_CANDIDATES = (
+    Path("data/zeiss"),
+)
+
+OVERLAY_DEFAULTS = {"manual", "edges", "refined_centerline", "refined_edges"}
 
 
 class MainWindow(QMainWindow):
@@ -55,6 +84,7 @@ class MainWindow(QMainWindow):
         *,
         initial_path: str | None = None,
         smoke_test: bool = False,
+        workspace_controller: WorkspaceController | None = None,
     ) -> None:
         super().__init__()
         self.session = session or ProjectSession(FathomEngine())
@@ -64,12 +94,24 @@ class MainWindow(QMainWindow):
         self.active_task: AnalysisTask | None = None
         self._selection_sync = False
         self._smoke_test = smoke_test
+        self._field_sample_index: int | None = None
+        self._field_position: QRectF | None = None
+        self._overlay_state: set[str] = set(OVERLAY_DEFAULTS)
+        self._mode = "analyze"
         self.setWindowTitle("Fathom Fibers")
         self.resize(1500, 920)
         self.setMinimumSize(1050, 680)
 
         self.viewer = ScientificImageView()
-        self.setCentralWidget(self.viewer)
+        self.landing = self._build_landing()
+        self.central_stack = QStackedWidget()
+        self.central_stack.addWidget(self.landing)
+        self.central_stack.addWidget(self.viewer)
+        self.setCentralWidget(self.central_stack)
+        self.workspace = workspace_controller or WorkspaceController(self.session, self)
+        self.overlay_layers = OverlayLayers(self.viewer)
+        self.viewer.set_scientific_overlays(self.overlay_layers)
+
         self.project_panel = ProjectPanel(self.session)
         self.results_panel = ResultsPanel(self.session)
         self.inspector_panel = InspectorPanel()
@@ -77,13 +119,29 @@ class MainWindow(QMainWindow):
         self.comparison_panel = ComparisonPanel()
         self.batch_review_panel = BatchReviewPanel()
         self.history_panel = HistoryPanel(self.session)
+
+        self.dataset_panel = DatasetPanel()
+        self.overlay_panel = OverlayPanel()
+        self.workspace_inspector = WorkspaceInspector()
+        self.summary_panel = SummaryPanel()
+        self.distributions_panel = DistributionsPanel()
+        self.methods_panel = MethodsPanel()
+        self.measurements_panel = MeasurementsPanel(self.session)
+        self.quality_panel = QualityPanel()
+        self.manual_panel = Manual5x5Panel()
+        self.image_summary_panel = ImageSummaryPanel()
+        self.report_header = ReportHeaderPanel()
+
         self._build_docks()
         self._build_actions()
         self._build_menus_and_toolbars()
         self._build_status_bar()
         self._wire()
+        self._wire_workspace()
         self._start_autosave_timer()
         self._refresh_all()
+        self._restore_window_state()
+        self._update_landing()
         campaign_manifest = Path.cwd() / ".validation/real-tiff-campaign/dataset_manifest.json"
         if campaign_manifest.exists():
             try:
@@ -93,33 +151,61 @@ class MainWindow(QMainWindow):
 
         if initial_path:
             QTimer.singleShot(0, lambda: self.open_path(initial_path))
+        if not self._quick_start_seen:
+            QTimer.singleShot(900, lambda: self._open_help(PAGE_QUICK_START))
+
+    # ------------------------------------------------------------------ docks
 
     def _build_docks(self) -> None:
-        project_dock = QDockWidget("PROJECT", self)
-        project_dock.setObjectName("projectDock")
-        project_dock.setWidget(self.project_panel)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, project_dock)
+        self.project_dock = QDockWidget("PROJECT", self)
+        self.project_dock.setObjectName("projectDock")
+        self.project_dock.setWidget(self.project_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.project_dock)
 
-        inspector_tabs = QTabWidget()
-        inspector_tabs.addTab(self.inspector_panel, "Measurement")
-        inspector_tabs.addTab(self._display_panel(), "Display")
-        inspector_dock = QDockWidget("INSPECTOR", self)
-        inspector_dock.setObjectName("inspectorDock")
-        inspector_dock.setWidget(inspector_tabs)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, inspector_dock)
+        self.dataset_dock = QDockWidget("DATASET", self)
+        self.dataset_dock.setObjectName("datasetDock")
+        self.dataset_dock.setWidget(self.dataset_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dataset_dock)
 
-        bottom_tabs = QTabWidget()
-        bottom_tabs.addTab(self.results_panel, "RESULTS / MEASUREMENTS")
-        bottom_tabs.addTab(self.history_panel, "HISTORY")
-        bottom_tabs.addTab(self.analysis_panel, "ANALYSIS")
-        bottom_tabs.addTab(self.comparison_panel, "COMPARE METHODS")
-        bottom_tabs.addTab(self.batch_review_panel, "BATCH MEASUREMENT REVIEW")
-        self.bottom_tabs = bottom_tabs
-        bottom_dock = QDockWidget("RESULTS / HISTORY / ANALYSIS", self)
-        bottom_dock.setObjectName("resultsDock")
-        bottom_dock.setWidget(bottom_tabs)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, bottom_dock)
-        bottom_dock.setMinimumHeight(250)
+        self.overlay_dock = QDockWidget("OVERLAYS", self)
+        self.overlay_dock.setObjectName("overlayDock")
+        self.overlay_dock.setWidget(self.overlay_panel)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.overlay_dock)
+
+        self.inspector_tabs = QTabWidget()
+        self.inspector_tabs.addTab(self.image_summary_panel, "Image")
+        self.inspector_tabs.addTab(self.inspector_panel, "Measurement")
+        self.inspector_tabs.addTab(self.workspace_inspector, "Workspace")
+        self.inspector_tabs.addTab(self._display_panel(), "Display")
+        self.inspector_dock = QDockWidget("INSPECTOR", self)
+        self.inspector_dock.setObjectName("inspectorDock")
+        self.inspector_dock.setWidget(self.inspector_tabs)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_dock)
+
+        self.bottom_tabs = QTabWidget()
+        self.bottom_tabs.addTab(self.summary_panel, "SUMMARY")
+        self.bottom_tabs.addTab(self.distributions_panel, "DISTRIBUTIONS")
+        self.bottom_tabs.addTab(self.methods_panel, "METHODS")
+        self.bottom_tabs.addTab(self.measurements_panel, "MEASUREMENTS")
+        self.bottom_tabs.addTab(self.quality_panel, "QUALITY")
+        self.bottom_tabs.addTab(self.manual_panel, "MANUAL 5×5")
+        self.bottom_tabs.addTab(self.results_panel, "RESULTS / MEASUREMENTS")
+        self.bottom_tabs.addTab(self.history_panel, "HISTORY")
+        self.bottom_tabs.addTab(self.analysis_panel, "ANALYSIS")
+        self.bottom_tabs.addTab(self.comparison_panel, "COMPARE METHODS")
+        self.bottom_tabs.addTab(self.batch_review_panel, "BATCH MEASUREMENT REVIEW")
+        bottom_container = QWidget()
+        bottom_layout = QVBoxLayout(bottom_container)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(0)
+        bottom_layout.addWidget(self.report_header)
+        bottom_layout.addWidget(self.bottom_tabs, 1)
+        self.bottom_dock = QDockWidget("RESULTS / HISTORY / ANALYSIS", self)
+        self.bottom_dock.setObjectName("resultsDock")
+        self.bottom_dock.setWidget(bottom_container)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.bottom_dock)
+        self.bottom_dock.setMinimumHeight(250)
+        self.report_header.setVisible(False)
 
     def _display_panel(self) -> QWidget:
         panel = QWidget()
@@ -147,6 +233,8 @@ class MainWindow(QMainWindow):
         form.addRow(note)
         return panel
 
+    # ---------------------------------------------------------------- actions
+
     def _action(
         self,
         text: str,
@@ -164,6 +252,10 @@ class MainWindow(QMainWindow):
 
     def _build_actions(self) -> None:
         self.open_image_action = self._action("Open image…", self.open_image_dialog, "Ctrl+O")
+        self.open_dataset_action = self._action("Open dataset…", self.open_dataset_dialog)
+        self.open_dataset_action.setToolTip(
+            "Open a folder of SEM images as a dataset."
+        )
         self.open_project_action = self._action("Open project…", self.open_project_dialog)
         self.save_action = self._action("Save project", self.save_project, "Ctrl+S")
         self.save_as_action = self._action("Save project as…", self.save_project_as, "Ctrl+Shift+S")
@@ -176,6 +268,59 @@ class MainWindow(QMainWindow):
         self.fit_action = self._action("Fit image", self.viewer.fit_to_window, "F")
         self.actual_action = self._action("1:1 pixels", self.viewer.actual_pixels, "1")
         self.reset_action = self._action("Reset view", self.viewer.reset_view, "0")
+        self.zoom_in_action = self._action("Zoom in", self._zoom_in, "Ctrl++")
+        self.zoom_out_action = self._action("Zoom out", self._zoom_out, "Ctrl+-")
+        self.previous_image_action = self._action("Previous image", self._previous_image, "Left")
+        self.next_image_action = self._action("Next image", self._next_image, "Right")
+        self.run_action = self._action("Run methods…", self._run_methods_dialog)
+        self.run_all_action = self._action("Run all dataset methods", self._run_all_dataset)
+        self.run_all_action.setToolTip(
+            "Recompute the analysis for every dataset image, including cached ones."
+        )
+        self.compare_action = self._action("Compare methods", self._show_comparison)
+        self.manual_action = self._action("Manual measurement", self._start_manual_tool, "M")
+        self.manual_5x5_action = self._action("Manual 5×5 workflow", self._show_manual_5x5)
+        self.manual_5x5_action.setToolTip(
+            "Open the focused Manual 5×5 measurement workspace."
+        )
+        self.report_action = self._action("Generate scientific report", self._generate_report, "Ctrl+R")
+        self.dataset_report_action = self._action(
+            "Generate dataset scientific report", self._generate_dataset_report
+        )
+        self.dataset_report_action.setToolTip(
+            "Generate the full dataset scientific report (HTML)."
+        )
+        self.export_results_action = self._action("Export current image results…", self._export_current)
+        self.export_dataset_action = self._action("Export dataset results…", self._export_dataset)
+        self.export_bundle_action = self._action("Export Analysis Bundle…", self._export_bundle)
+        self.export_bundle_action.setToolTip(
+            "Export results, figures, the HTML report and provenance to a folder."
+        )
+        self.methods_help_action = self._action("About methods…", self._methods_help)
+        self.quick_start_action = self._action("Quick Start", lambda: self._open_help(PAGE_QUICK_START))
+        self.user_guide_action = self._action("User Guide", lambda: self._open_help(PAGE_USER_GUIDE))
+        self.methods_guide_action = self._action("Methods Guide", lambda: self._open_help(PAGE_METHODS))
+        self.shortcuts_action = self._action("Keyboard Shortcuts", lambda: self._open_help(PAGE_SHORTCUTS))
+
+        self.mode_group = QActionGroup(self)
+        self.mode_group.setExclusive(True)
+        self.mode_actions = {
+            "analyze": self._action("Analyze", lambda: self.set_mode("analyze"), "A", checkable=True),
+            "manual": self._action("Manual", lambda: self.set_mode("manual"), "M", checkable=True),
+            "report": self._action("Report", lambda: self.set_mode("report"), "R", checkable=True),
+            "advanced": self._action("Advanced", lambda: self.set_mode("advanced"), checkable=True),
+        }
+        for action in self.mode_actions.values():
+            self.mode_group.addAction(action)
+        self.mode_actions["analyze"].setChecked(True)
+        self.mode_actions["analyze"].setToolTip("Explore automatic measurements and diagnostics.")
+        self.mode_actions["manual"].setToolTip("Focused Manual 5×5 measurement workspace.")
+        self.mode_actions["report"].setToolTip("Generate the scientific report and exports.")
+        self.mode_actions["advanced"].setToolTip("Technical diagnostics for expert use.")
+        self.mode_actions["analyze"].setToolTip("Explore automatic measurements and diagnostics.")
+        self.mode_actions["manual"].setToolTip("Focused Manual 5×5 measurement workspace.")
+        self.mode_actions["report"].setToolTip("Generate the scientific report and exports.")
+        self.mode_actions["advanced"].setToolTip("Technical diagnostics for expert use.")
 
         self.tool_group = QActionGroup(self)
         self.tool_group.setExclusive(True)
@@ -203,10 +348,27 @@ class MainWindow(QMainWindow):
         self.tool_actions["select"].setChecked(True)
         self.cancel_action = self._action("Cancel current tool", self.viewer.tools.cancel, "Esc")
 
+        self.view_mode_group = QActionGroup(self)
+        self.view_mode_group.setExclusive(True)
+        self.view_mode_group.triggered.connect(self._view_mode_changed)
+        self.view_image_action = self._action("Image", self._noop, checkable=True)
+        self.view_image_action.setChecked(True)
+        self.view_measurements_action = self._action("Measurements", self._noop, checkable=True)
+        self.view_comparison_action = self._action("Comparison", self._noop, checkable=True)
+        self.view_manual_action = self._action("Manual Review", self._noop, checkable=True)
+        for action in (
+            self.view_image_action,
+            self.view_measurements_action,
+            self.view_comparison_action,
+            self.view_manual_action,
+        ):
+            self.view_mode_group.addAction(action)
+
     def _build_menus_and_toolbars(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
         for action in (
             self.open_image_action,
+            self.open_dataset_action,
             self.open_project_action,
             self.save_action,
             self.save_as_action,
@@ -214,34 +376,104 @@ class MainWindow(QMainWindow):
             self.quit_action,
         ):
             file_menu.addAction(action)
+        image_menu = self.menuBar().addMenu("&Image")
+        image_menu.addActions(
+            (
+                self.previous_image_action,
+                self.next_image_action,
+                self.fit_action,
+                self.actual_action,
+                self.reset_action,
+                self.zoom_in_action,
+                self.zoom_out_action,
+            )
+        )
+        run_menu = self.menuBar().addMenu("&Run")
+        run_menu.addActions((self.run_action, self.run_all_action, self.compare_action))
+        report_menu = self.menuBar().addMenu("&Report")
+        report_menu.addActions(
+            (
+                self.report_action,
+                self.dataset_report_action,
+                self.export_bundle_action,
+                self.export_results_action,
+                self.export_dataset_action,
+            )
+        )
         edit_menu = self.menuBar().addMenu("&Edit")
         edit_menu.addActions((self.undo_action, self.redo_action, self.delete_action))
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addActions((self.fit_action, self.actual_action, self.reset_action))
+        view_menu.addSeparator()
+        view_menu.addActions(
+            (
+                self.view_image_action,
+                self.view_measurements_action,
+                self.view_comparison_action,
+                self.view_manual_action,
+            )
+        )
         tools_menu = self.menuBar().addMenu("&Tools")
         tools_menu.addActions(self.tool_group.actions())
         tools_menu.addSeparator()
         tools_menu.addAction(self.cancel_action)
+        self.help_menu = self.menuBar().addMenu("&Help")
+        self.help_menu.addActions(
+            (
+                self.quick_start_action,
+                self.user_guide_action,
+                self.methods_guide_action,
+                self.shortcuts_action,
+            )
+        )
+        self.help_menu.addSeparator()
+        self.help_menu.addAction(self.methods_help_action)
 
         toolbar = QToolBar("Main", self)
         toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
-        toolbar.addActions((self.open_image_action, self.save_action))
+        for key in ("analyze", "manual", "report", "advanced"):
+            toolbar.addAction(self.mode_actions[key])
         toolbar.addSeparator()
-        toolbar.addActions((self.undo_action, self.redo_action))
+        toolbar.addAction(self.open_dataset_action)
         toolbar.addSeparator()
-        toolbar.addActions(self.tool_group.actions())
+        toolbar.addAction(self.previous_image_action)
+        self.image_position_label = QLabel("—")
+        self.image_position_label.setProperty("role", "caption")
+        self.image_position_label.setMinimumWidth(92)
+        self.image_position_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        position_action = toolbar.addWidget(self.image_position_label)
+        position_action.setEnabled(True)
+        toolbar.addAction(self.next_image_action)
         toolbar.addSeparator()
-        toolbar.addActions((self.fit_action, self.actual_action))
+        toolbar.addAction(self.fit_action)
+        toolbar.addAction(self.actual_action)
+        toolbar.addAction(self.zoom_in_action)
+        toolbar.addAction(self.zoom_out_action)
+        toolbar.addSeparator()
+        toolbar.addAction(self.run_action)
+        toolbar.addAction(self.manual_5x5_action)
+        toolbar.addAction(self.dataset_report_action)
+        toolbar.addSeparator()
+        self.help_button_action = self._action("?", lambda: self._open_help(PAGE_QUICK_START))
+        self.help_button_action.setToolTip("Quick Start")
+        toolbar.addAction(self.help_button_action)
         self.addToolBar(toolbar)
 
     def _build_status_bar(self) -> None:
         self.scientific_notice = QLabel(
             "Measurements represent projected 2D geometry. Automatic results require review."
         )
+        self.progress_label = QLabel("")
         self.coordinate_label = QLabel("x —  y —  value —")
+        self.workspace_status_label = QLabel("")
+        self.workspace_status_label.setProperty("role", "caption")
         self.statusBar().addWidget(self.scientific_notice, 1)
+        self.statusBar().addWidget(self.progress_label)
+        self.statusBar().addPermanentWidget(self.workspace_status_label)
         self.statusBar().addPermanentWidget(self.coordinate_label)
+
+    # ------------------------------------------------------------------ wire
 
     def _wire(self) -> None:
         self.viewer.measurementRequested.connect(self._create_measurement)
@@ -249,6 +481,7 @@ class MainWindow(QMainWindow):
         self.viewer.recordSelected.connect(self._select_record)
         self.viewer.geometryEdited.connect(self._edit_geometry)
         self.viewer.coordinateChanged.connect(self._show_coordinate)
+        self.viewer.fieldSampleClicked.connect(self._select_field_sample)
         self.project_panel.recordSelected.connect(self._select_record)
         self.project_panel.focusRequested.connect(self.viewer.focus_record)
         self.results_panel.recordSelected.connect(self._select_record)
@@ -274,6 +507,435 @@ class MainWindow(QMainWindow):
         self.invert_check.toggled.connect(self._display_changed)
         self.footer_check.toggled.connect(self.viewer.set_footer_visible)
 
+    def _wire_workspace(self) -> None:
+        controller = self.workspace
+        self.dataset_panel.set_controller(controller)
+        self.dataset_panel.imageRequested.connect(controller.select_image)
+        self.dataset_panel.openRequested.connect(self.open_dataset_dialog)
+        self.dataset_panel.runRequested.connect(self._dataset_run_requested)
+        controller.datasetLoaded.connect(self._dataset_loaded)
+        controller.imageChanged.connect(self._workspace_image_changed)
+        controller.resultsChanged.connect(self._workspace_results_changed)
+        controller.busyChanged.connect(self._workspace_busy)
+        controller.methodProgress.connect(self._workspace_progress)
+        controller.manualChanged.connect(self._workspace_manual_changed)
+        controller.reportReady.connect(self._report_ready)
+        controller.reportFailed.connect(self._report_failed)
+        controller.errorRaised.connect(self._workspace_error)
+        self.overlay_panel.overlayChanged.connect(self._overlay_toggled)
+        self.overlay_panel.densityChanged.connect(self._overlay_density)
+        self.measurements_panel.fieldSampleSelected.connect(self._select_field_sample)
+        self.measurements_panel.recordSelected.connect(self._select_record)
+        self.methods_panel.methodSelected.connect(self._method_selected)
+        self.manual_panel.targetRequested.connect(self._manual_target)
+        self.manual_panel.removeRequested.connect(self._manual_remove)
+        self.manual_panel.skipRequested.connect(self._manual_skip)
+        self.manual_panel.nextImageRequested.connect(self._manual_next_image)
+        self.dataset_panel.exploreRequested.connect(self._explore_results)
+        self.report_header.datasetReportRequested.connect(self._generate_dataset_report)
+        self.report_header.bundleExportRequested.connect(self._export_bundle)
+        self.report_header.imageReportRequested.connect(self._generate_report)
+        self.viewer.fieldSampleClicked.connect(self._show_inspector_details)
+        self.viewer.recordSelected.connect(self._show_inspector_details)
+
+    # ----------------------------------------------------------- workspace io
+
+    def open_dataset_dialog(self) -> None:
+        start = str(DEFAULT_DATASET_CANDIDATES[0]) if DEFAULT_DATASET_CANDIDATES[0].is_dir() else ""
+        path = QFileDialog.getExistingDirectory(self, "Open scientific dataset", start)
+        if path:
+            self.open_dataset(path)
+
+    def open_dataset(self, path: str | Path) -> None:
+        try:
+            dataset = self.workspace.open_dataset(path)
+            self.statusBar().showMessage(
+                f"Opened dataset {dataset.dataset_id} ({len(dataset.images)} images)", 7000
+            )
+        except Exception as exc:
+            logger.exception("Failed to open dataset %s", path)
+            QMessageBox.critical(self, "Open dataset failed", str(exc))
+
+    def _dataset_loaded(self) -> None:
+        self.dataset_panel.refresh()
+        self._update_landing()
+        self._update_workspace_status()
+        self.set_mode(self._mode)
+
+    def _explore_results(self) -> None:
+        self.set_mode("analyze")
+        self.bottom_tabs.setCurrentWidget(self.distributions_panel)
+
+    def _show_inspector_details(self, *_args) -> None:
+        if self._field_sample_index is not None:
+            self.inspector_tabs.setCurrentWidget(self.workspace_inspector)
+        elif self.session.selected_record() is not None:
+            self.inspector_tabs.setCurrentWidget(self.inspector_panel)
+        else:
+            self.inspector_tabs.setCurrentWidget(self.image_summary_panel)
+
+    def _dataset_run_requested(self, action: str) -> None:
+        if action == "all":
+            self.workspace.run_all_dataset()
+        else:
+            self.workspace.run_missing()
+
+    def _update_image_position(self) -> None:
+        dataset = self.workspace.dataset
+        if dataset is None or self.workspace.current_image is None:
+            self.image_position_label.setText("—")
+            return
+        self.image_position_label.setText(
+            f"Image {self.workspace.current_index + 1:02d} / {len(dataset.images):02d}"
+        )
+
+    def _workspace_image_changed(self) -> None:
+        image = self.session.image
+        self.viewer.set_image(image)
+        self._field_sample_index = None
+        self._field_position = None
+        self._refresh_workspace_panels()
+        self._refresh_overlays()
+        self._refresh_manual_panel()
+        self._refresh_all()
+        self._update_calibration()
+        self._update_title()
+        self._update_image_position()
+        self._update_workspace_status()
+        self._update_landing()
+
+    def _workspace_results_changed(self) -> None:
+        self._refresh_workspace_panels()
+        self._refresh_overlays()
+        self._refresh_manual_panel()
+        self._update_image_position()
+        self._update_workspace_status()
+        self.image_summary_panel.set_image(self.session.image, self.workspace.comparison)
+
+    def _refresh_workspace_panels(self) -> None:
+        comparison = self.workspace.comparison
+        payload = self.workspace.summary_payload
+        image = self.session.image
+        self.summary_panel.set_image(image)
+        self.image_summary_panel.set_image(image, comparison)
+        if comparison is not None:
+            self.summary_panel.set_comparison(comparison)
+            self.distributions_panel.set_comparison(comparison)
+            self.methods_panel.set_comparison(comparison)
+            self.measurements_panel.set_comparison(comparison)
+            self.quality_panel.set_comparison(comparison)
+            self.comparison_panel.set_unified_result(comparison, image)
+        elif payload is not None:
+
+            self.summary_panel.set_comparison(None)
+            self.distributions_panel.set_comparison(None)
+            self.methods_panel.set_comparison(None)
+            self.measurements_panel.set_comparison(None)
+            self.quality_panel.set_comparison(None)
+            self._summary_only_view(payload)
+        else:
+            self.summary_panel.set_comparison(None)
+            self.distributions_panel.set_comparison(None)
+            self.methods_panel.set_comparison(None)
+            self.measurements_panel.set_comparison(None)
+            self.quality_panel.set_comparison(None)
+        self.dataset_panel.refresh()
+        self._field_sample_index = None
+        self.workspace_inspector.clear()
+
+    def _summary_only_view(self, payload: dict[str, Any]) -> None:
+        self.summary_panel.info.append(
+            "<p style='color:#8a6d1a'>Summary cache only — run methods for full samples.</p>"
+        )
+
+    def _refresh_overlays(self) -> None:
+        results = self.workspace.results
+        image = self.session.image
+        self.overlay_panel.set_availability(results)
+        if results and image is not None:
+            self.overlay_layers.set_payload(build_overlay_payload(results, image))
+            self.overlay_layers.set_density(self.overlay_panel.density.currentText())
+            for key in self.overlay_layers.LAYER_NAMES:
+                check = self.overlay_panel.checks.get(key)
+                if check is not None:
+                    check.setChecked(key in self._overlay_state)
+                self.overlay_layers.set_visible(key, key in self._overlay_state)
+        else:
+            self.overlay_layers.set_payload({})
+        self._refresh_field_selection()
+
+    def _overlay_toggled(self, key: str, visible: bool) -> None:
+        if visible:
+            self._overlay_state.add(key)
+        else:
+            self._overlay_state.discard(key)
+        if key == "manual":
+            self._refresh_manual_records_overlay()
+            return
+        self.overlay_layers.set_visible(key, visible)
+
+    def _refresh_manual_records_overlay(self) -> None:
+        project = self.session.project
+        records = project.records if project and "manual" in self._overlay_state else []
+        self.viewer.set_records(records, self.session.selected_record_id)
+
+    def _overlay_density(self, density: str) -> None:
+        self.overlay_layers.set_density(density)
+
+    def _refresh_field_selection(self) -> None:
+        if self._field_sample_index is None:
+            self.viewer.set_field_selection_highlight(None)
+            self.workspace_inspector.clear()
+            return
+        index = self._field_sample_index
+        samples = self.workspace.results.get(MethodId.FATHOM_FIELD_GRAPH_V1)
+        samples = samples.local_samples if samples else None
+        rect = self.overlay_layers.selection_rect(index)
+        self.viewer.set_field_selection_highlight(rect)
+        self.workspace_inspector.set_field_sample(samples, index)
+
+    def _select_field_sample(self, index: int) -> None:
+        self._field_sample_index = int(index)
+        self.measurements_panel.select_field_row(self._field_sample_index)
+        self._refresh_field_selection()
+        self.inspector_tabs.setCurrentWidget(self.workspace_inspector)
+        point = self.overlay_layers.sample_position_px(self._field_sample_index)
+        if point is not None:
+            self.viewer.centerOn(point)
+            self.viewer.set_field_selection_highlight(self.overlay_layers.selection_rect(self._field_sample_index))
+            self.workspace_inspector.set_field_sample(
+                self.workspace.results.get(MethodId.FATHOM_FIELD_GRAPH_V1).local_samples
+                if self.workspace.results.get(MethodId.FATHOM_FIELD_GRAPH_V1)
+                else None,
+                self._field_sample_index,
+            )
+
+    def _method_selected(self, method_id: str) -> None:
+        result = self.workspace.results.get(MethodId(method_id))
+        self.workspace_inspector.set_result_provenance(result)
+
+    def _workspace_busy(self, busy: bool) -> None:
+        self.run_action.setEnabled(not busy)
+        self.run_all_action.setEnabled(not busy)
+        self.dataset_panel.run_all_button.setEnabled(not busy)
+        self.dataset_panel.run_missing_button.setEnabled(not busy)
+        if not busy:
+            self.progress_label.setText("")
+
+    def _workspace_progress(self, message: str) -> None:
+        self.progress_label.setText(message)
+        self.statusBar().showMessage(message, 15000)
+
+    def _workspace_error(self, message: str, details: str) -> None:
+        logger.error("Workspace error: %s\n%s", message, details)
+        self.progress_label.setText(f"Failed: {message}")
+        if self._smoke_test:
+            self.statusBar().showMessage(f"Failed: {message}", 15000)
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Critical)
+        box.setWindowTitle("Analysis failed")
+        box.setText(message)
+        box.setDetailedText(details[:4000])
+        box.exec()
+
+    def _report_ready(self, path: str) -> None:
+        self.statusBar().showMessage(f"Report generated: {path}", 15000)
+        if self._smoke_test:
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Scientific report")
+        box.setText(f"Report generated:\n{path}")
+        open_button = box.addButton("Open in browser", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Close", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is open_button:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def _report_failed(self, message: str, details: str) -> None:
+        self._workspace_error(f"Report failed: {message}", details)
+
+    # ------------------------------------------------------------- navigation
+
+    def _previous_image(self) -> None:
+        self.workspace.previous_image()
+
+    def _next_image(self) -> None:
+        self.workspace.next_image()
+
+    def _zoom_in(self) -> None:
+        self.viewer.scale(1.25, 1.25)
+
+    def _zoom_out(self) -> None:
+        self.viewer.scale(0.8, 0.8)
+
+    def _run_methods_dialog(self) -> None:
+        if self.workspace.dataset is None:
+            self.statusBar().showMessage("Open a dataset before running methods.", 5000)
+            return
+        dialog = RunMethodsDialog(self)
+        if dialog.exec():
+            if dialog.current_button == "missing":
+                self.workspace.run_missing()
+            elif dialog.current_button == "all":
+                self.workspace.run_all_dataset()
+            else:
+                self.workspace.run_current_image()
+
+    def _run_all_dataset(self) -> None:
+        self.workspace.run_all_dataset()
+
+    def _show_comparison(self) -> None:
+        if self.workspace.comparison is None and self.workspace.current_image is not None:
+            self.workspace.run_current_image()
+        self.set_mode("analyze")
+        self.bottom_tabs.setCurrentWidget(self.comparison_panel)
+
+    def _start_manual_tool(self) -> None:
+        self.viewer.activate_tool("projected_width")
+        self.tool_actions["projected_width"].setChecked(True)
+
+    def _show_manual_5x5(self) -> None:
+        self.set_mode("manual")
+        if self.workspace.current_image is not None:
+            self.manual_panel.next_target()
+
+    def _generate_report(self) -> None:
+        self.workspace.generate_image_report()
+
+    def _generate_dataset_report(self) -> None:
+        self.workspace.generate_dataset_report()
+
+    def _export_current(self) -> None:
+        if self.workspace.current_image is None:
+            self.statusBar().showMessage("Open an image before exporting.", 5000)
+            return
+        directory = QFileDialog.getExistingDirectory(self, "Export current image results")
+        if not directory:
+            return
+        try:
+            written = self.workspace.export_current_results(directory)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
+        self.statusBar().showMessage(f"Exported {len(written)} files to {directory}", 8000)
+
+    def _export_bundle(self) -> None:
+        if self.workspace.dataset is None:
+            self.statusBar().showMessage("Open a dataset before exporting.", 5000)
+            return
+        directory = QFileDialog.getExistingDirectory(
+            self, "Export analysis bundle", str(Path.cwd() / "release")
+        )
+        if not directory:
+            return
+        self.workspace.export_analysis_bundle(directory)
+        self.statusBar().showMessage("Analysis bundle export running…", 5000)
+
+    def _export_dataset(self) -> None:
+        if self.workspace.dataset is None:
+            self.statusBar().showMessage("Open a dataset before exporting.", 5000)
+            return
+        directory = QFileDialog.getExistingDirectory(self, "Export dataset results")
+        if not directory:
+            return
+        try:
+            written = self.workspace.export_dataset_results(directory)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
+        self.statusBar().showMessage(f"Exported {len(written)} files to {directory}", 8000)
+
+    def _view_mode_changed(self, action: QAction) -> None:
+        if action is self.view_measurements_action:
+            self.bottom_tabs.setCurrentWidget(self.measurements_panel)
+        elif action is self.view_comparison_action:
+            self.bottom_tabs.setCurrentWidget(self.comparison_panel)
+        elif action is self.view_manual_action:
+            self.bottom_tabs.setCurrentWidget(self.manual_panel)
+
+    @staticmethod
+    def _noop() -> None:
+        pass
+
+    # ------------------------------------------------------- manual 5x5 flow
+
+    def _refresh_manual_panel(self) -> None:
+        image = self.workspace.current_image
+        review = self.workspace.manual_review
+        if image is None or review is None:
+            self.manual_panel.set_review(None)
+            return
+        self.manual_panel.set_review(review, image.case_id)
+        index = self.workspace.current_index + 1
+        count = len(self.workspace.dataset.images)
+        self.manual_panel.set_image_index(index, count, self.workspace.manual.total_measured)
+
+    def _manual_target(self, row: int, column: int) -> None:
+        image = self.session.image
+        if image is None:
+            return
+        self._start_manual_tool()
+        rect = _manual_cell_rect(row, column, image)
+        self.viewer.set_manual_target(rect)
+        self.viewer.fitInView(rect.adjusted(-rect.width() * 0.25, -rect.height() * 0.25, rect.width() * 0.25, rect.height() * 0.25), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def _manual_remove(self, row: int, column: int) -> None:
+        self.workspace.remove_manual_measurement(row, column)
+        record = self._record_for_cell(row, column)
+        if record is not None:
+            self.session.delete_records([record.measurement_id])
+        self._refresh_manual_panel()
+        self._refresh_all()
+
+    def _record_for_cell(self, row: int, column: int) -> MeasurementRecord | None:
+        position = f"R{row + 1}C{column + 1}"
+        for record in self.session.project.records:
+            if record.protocol_snapshot.get("protocol_id") == "MANUAL_5X5_REFERENCE" and (
+                record.protocol_snapshot.get("grid_position") == position
+            ):
+                return record
+        return None
+
+    def _manual_skip(self, row: int, column: int) -> None:
+        reason, accepted = QInputDialog.getText(
+            self, "Skip grid position", "Scientific reason:"
+        )
+        if not accepted or not reason.strip():
+            return
+        self.workspace.skip_manual_measurement(row, column, reason)
+        self._refresh_manual_panel()
+        self._refresh_all()
+
+    def _manual_next_image(self) -> None:
+        self.workspace.next_image()
+
+    def _workspace_manual_changed(self) -> None:
+        self._refresh_manual_panel()
+        self._refresh_workspace_panels()
+        self._manual_feedback()
+        self._update_workspace_status()
+        self.manual_panel.accept_and_advance()
+
+    def _manual_feedback(self) -> None:
+        review = self.workspace.manual_review
+        if review is None:
+            return
+        latest = None
+        for row in range(5):
+            for column in range(5):
+                cell = review.cell(row, column)
+                if cell.diameter is not None:
+                    latest = cell
+        if latest is not None and latest.diameter is not None:
+            self.manual_panel.flash_feedback(f"{latest.diameter:.3f} µm · Saved ✓")
+
+    # ------------------------------------------------------------- session
+
     def _history_state(self, can_undo: bool, can_redo: bool) -> None:
         self.undo_action.setEnabled(can_undo)
         self.redo_action.setEnabled(can_redo)
@@ -289,17 +951,13 @@ class MainWindow(QMainWindow):
     def _session_event(self, event: str) -> None:
         if event == "selection":
             self._sync_selection()
-        else:
+        elif event == "records":
             self._refresh_all()
 
     def _refresh_all(self) -> None:
-        project = self.session.project
         self._selection_sync = True
         try:
-            self.viewer.set_records(
-                project.records if project else [],
-                self.session.selected_record_id,
-            )
+            self._refresh_manual_records_overlay()
             self.project_panel.refresh()
             self.results_panel.refresh()
             self.history_panel.refresh()
@@ -325,12 +983,20 @@ class MainWindow(QMainWindow):
             self._selection_sync = False
 
     def _select_record(self, record_id: str | None) -> None:
+        if record_id is None:
+            self._field_sample_index = None
+            self.viewer.set_field_selection_highlight(None)
+            self.inspector_tabs.setCurrentWidget(self.image_summary_panel)
         if self._selection_sync or record_id == self.session.selected_record_id:
             return
         self.session.select(record_id)
+        self._show_inspector_details()
 
     def _update_title(self) -> None:
         project = self.session.project
+        if project is None:
+            self.setWindowTitle("Fathom Fibers")
+            return
         name = Path(project.project_path or project.image.path).name if project else "No project"
         marker = " *" if self.session.dirty else ""
         self.setWindowTitle(f"Fathom Fibers — {name}{marker}")
@@ -351,6 +1017,8 @@ class MainWindow(QMainWindow):
             f"x {x:.1f}  y {y:.1f}  value {value}  |  "
             f"{physical_x * 1e6:.4g}, {physical_y * 1e6:.4g} µm"
         )
+
+    # ------------------------------------------------------------- open/save
 
     def open_image_dialog(self) -> None:
         path, _filter = QFileDialog.getOpenFileName(
@@ -479,21 +1147,48 @@ class MainWindow(QMainWindow):
         project.records = [r for r in self.session.project.records if r.measurement_id in selected]
         export_csv(project, path)
 
+    # ---------------------------------------------------------- measurements
+
     def _create_measurement(self, kind: str, geometry: dict[str, Any]) -> None:
         try:
             record = self.session.create_measurement(kind, geometry)
-            case = self.batch_review_panel.current_case()
-            grid = self.batch_review_panel.active_grid_position()
-            if kind == "PROJECTED_WIDTH" and case is not None and grid is not None:
+        except Exception as exc:
+            logger.exception("Measurement creation failed")
+            self.statusBar().showMessage(f"Measurement rejected: {exc}", 7000)
+            return
+        case = self.batch_review_panel.current_case()
+        grid = self.batch_review_panel.active_grid_position()
+        if kind == "PROJECTED_WIDTH":
+            if self._try_record_manual_5x5(record):
+                return
+            if case is not None and grid is not None:
                 position = f"R{grid[0] + 1}C{grid[1] + 1}"
                 self.session.annotate_manual_grid(
                     record.measurement_id, case_id=case["case_id"], grid_position=position
                 )
                 self.batch_review_panel.record_measurement(record)
-            self.statusBar().showMessage(f"Created {record.measurement_id}", 3000)
-        except Exception as exc:
-            logger.exception("Measurement creation failed")
-            self.statusBar().showMessage(f"Measurement rejected: {exc}", 7000)
+        self.statusBar().showMessage(f"Created {record.measurement_id}", 3000)
+
+    def _try_record_manual_5x5(self, record: MeasurementRecord) -> bool:
+        if self.workspace.current_image is None:
+            return False
+        position = self.manual_panel.active_grid_position()
+        case_id = self.manual_panel.current_case_id()
+        if position is None or case_id is None:
+            return False
+        row, column = position
+        if record.kind.value != "PROJECTED_WIDTH":
+            return False
+        grid_position = f"R{row + 1}C{column + 1}"
+        try:
+            self.session.annotate_manual_grid(
+                record.measurement_id, case_id=case_id, grid_position=grid_position
+            )
+        except Exception:
+            logger.exception("Manual grid annotation failed for %s", record.measurement_id)
+        self.workspace.accept_manual_measurement(record, row, column)
+        self.statusBar().showMessage(f"Manual 5×5 {grid_position} recorded and autosaved", 4000)
+        return True
 
     def _edit_geometry(self, record_id: str, geometry: dict[str, Any]) -> None:
         try:
@@ -512,6 +1207,8 @@ class MainWindow(QMainWindow):
     def _delete_ids(self, record_ids: list[str]) -> None:
         if record_ids:
             self.session.delete_records(record_ids)
+
+    # -------------------------------------------------------------- analysis
 
     def _run_analysis(self, method: str) -> None:
         if self.session.image is None or self.active_task is not None:
@@ -560,11 +1257,14 @@ class MainWindow(QMainWindow):
     def _run_comparison(self) -> None:
         if self.session.image is None or self.active_task is not None:
             return
-        self._start_task(self.session.compare_methods, self._comparison_done)
+        self._start_task(self.session.compare_all_methods, self._comparison_done)
 
-    def _comparison_done(self, result: MethodComparisonResult) -> None:
+    def _comparison_done(self, result: MethodComparisonResult | UnifiedMethodComparison) -> None:
         if self.session.image is not None:
-            self.comparison_panel.set_result(result, self.session.image)
+            if isinstance(result, UnifiedMethodComparison):
+                self.comparison_panel.set_unified_result(result, self.session.image)
+            else:
+                self.comparison_panel.set_result(result, self.session.image)
         self.analysis_panel.set_running(False, "Method comparison complete")
 
     def _run_batch_action(self, action: str) -> None:
@@ -637,6 +1337,8 @@ class MainWindow(QMainWindow):
         if self.analysis_panel.run_button.isEnabled() is False:
             self.analysis_panel.set_running(False, self.analysis_panel.status.text())
 
+    # --------------------------------------------------------------- autosave
+
     def _start_autosave_timer(self) -> None:
         self.autosave_timer = QTimer(self)
         self.autosave_timer.setInterval(30_000)
@@ -668,6 +1370,172 @@ class MainWindow(QMainWindow):
         if self._smoke_test or self._confirm_discard():
             if self.active_task:
                 self.active_task.cancel()
+            self.workspace._cancel_tasks()
+            self._persist_window_state()
             event.accept()
         else:
             event.ignore()
+
+
+
+    # ------------------------------------------------------------------ modes
+
+    MODE_TABS: ClassVar[dict[str, frozenset[str] | None]] = {
+        "analyze": frozenset({"DISTRIBUTIONS", "COMPARE METHODS", "QUALITY"}),
+        "manual": frozenset({"MANUAL 5×5"}),
+        "report": frozenset({"SUMMARY", "DISTRIBUTIONS", "COMPARE METHODS", "QUALITY", "MANUAL 5×5"}),
+        "advanced": None,
+    }
+    MODE_DOCKS: ClassVar[dict[str, frozenset[str]]] = {
+        "analyze": frozenset({"dataset", "overlay", "inspector"}),
+        "manual": frozenset({"dataset"}),
+        "report": frozenset({"dataset", "inspector"}),
+        "advanced": frozenset({"project", "dataset", "overlay", "inspector"}),
+    }
+
+    def set_mode(self, mode: str) -> None:
+        """Switch the top-level workspace mode (analyze/manual/report/advanced)."""
+        if mode not in self.mode_actions:
+            return
+        self._mode = mode
+        for key, action in self.mode_actions.items():
+            action.setChecked(key == mode)
+        self._apply_mode(mode)
+        self._update_workspace_status()
+
+    def _apply_mode(self, mode: str) -> None:
+        self.bottom_dock.show()
+        for key in ("project", "dataset", "overlay", "inspector"):
+            dock = getattr(self, f"{key}_dock")
+            visible = key in self.MODE_DOCKS[mode]
+            dock.setVisible(visible)
+            dock.setEnabled(True)
+        allowed = self.MODE_TABS[mode]
+        for index in range(self.bottom_tabs.count()):
+            visible = allowed is None or self.bottom_tabs.tabText(index) in allowed
+            self.bottom_tabs.setTabVisible(index, visible)
+        self.report_header.setVisible(mode == "report")
+        if mode == "analyze" and self.bottom_tabs.currentWidget() not in {
+            self.distributions_panel, self.comparison_panel, self.quality_panel,
+        }:
+            self.bottom_tabs.setCurrentWidget(self.distributions_panel)
+        elif mode == "manual":
+            self.bottom_tabs.setCurrentWidget(self.manual_panel)
+            self.manual_panel.next_target()
+        elif mode == "report" and self.bottom_tabs.currentWidget() not in {
+            self.summary_panel, self.distributions_panel, self.comparison_panel,
+            self.quality_panel, self.manual_panel,
+        }:
+            self.bottom_tabs.setCurrentWidget(self.summary_panel)
+
+    def _update_workspace_status(self) -> None:
+        dataset = self.workspace.dataset
+        if dataset is None:
+            self.workspace_status_label.setText("")
+            return
+        image = self.workspace.current_image
+        position = (
+            f"Image {self.workspace.current_index + 1} / {len(dataset.images)}"
+            if image is not None
+            else "No image"
+        )
+        manual = self.workspace.manual
+        manual_text = ""
+        if manual is not None and manual.total_measured:
+            manual_text = f" · manual {manual.total_measured} / 400"
+        self.workspace_status_label.setText(
+            f"{position} · {self._mode.capitalize()}{manual_text}"
+        )
+
+    def _build_landing(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(12)
+        title = QLabel("FATHOM FIBERS")
+        title.setProperty("role", "title")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle = QLabel("Scientific fiber morphology workspace")
+        subtitle.setProperty("role", "muted")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        open_button = QPushButton("Open Dataset")
+        open_button.setProperty("role", "primary")
+        open_button.setMinimumWidth(200)
+        open_button.clicked.connect(self.open_dataset_dialog)
+        hint = QLabel("Analyze · Measure · Report")
+        hint.setProperty("role", "caption")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        quick_start_button = QPushButton("Quick Start")
+        quick_start_button.clicked.connect(lambda: self._open_help(PAGE_QUICK_START))
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addSpacing(16)
+        layout.addWidget(open_button, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(quick_start_button, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint)
+        return widget
+
+    def _update_landing(self) -> None:
+        has_dataset = self.workspace.dataset is not None
+        self.central_stack.setCurrentWidget(self.viewer if has_dataset else self.landing)
+        if has_dataset:
+            self._apply_mode(self._mode)
+        else:
+            for dock in (
+                self.project_dock,
+                self.dataset_dock,
+                self.overlay_dock,
+                self.inspector_dock,
+                self.bottom_dock,
+            ):
+                dock.hide()
+
+    def _restore_window_state(self) -> None:
+        if self._smoke_test:
+            return
+        settings = QSettings("Fathom", "Fathom Fibers")
+        geometry = settings.value("window/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        mode = settings.value("window/mode", "analyze")
+        if mode in self.mode_actions:
+            self.set_mode(mode)
+
+    def _persist_window_state(self) -> None:
+        if self._smoke_test:
+            return
+        settings = QSettings("Fathom", "Fathom Fibers")
+        settings.setValue("window/geometry", self.saveGeometry())
+        settings.setValue("window/mode", self._mode)
+
+    def _methods_help(self) -> None:
+        dialog = MethodsOverviewDialog(self)
+        dialog.exec()
+
+    def _open_help(self, page: int) -> None:
+        dialog = HelpDialog(self, page=page)
+        dialog.dont_show_check.setChecked(self._quick_start_seen)
+        dialog.dont_show_check.toggled.connect(self._set_quick_start_seen)
+        dialog.exec()
+
+    def _set_quick_start_seen(self, checked: bool) -> None:
+        if not self._smoke_test:
+            QSettings("Fathom", "Fathom Fibers").setValue("help/quick_start_seen", bool(checked))
+
+    @property
+    def _quick_start_seen(self) -> bool:
+        if self._smoke_test:
+            return True
+        return bool(QSettings("Fathom", "Fathom Fibers").value("help/quick_start_seen", False))
+
+def _manual_cell_rect(row: int, column: int, image: ScientificImage) -> QRectF:
+    height, width = image.shape
+    body_height = image.footer_bounds[0] if image.footer_bounds else height
+    cell_width = width / 5.0
+    cell_height = body_height / 5.0
+    return QRectF(
+        column * cell_width,
+        row * cell_height,
+        cell_width,
+        cell_height,
+    )
