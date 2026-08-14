@@ -133,7 +133,8 @@ def test_dataset_report_sections():
     assert "Mean ± 1 SD (nm)" in text
     assert "Median of image medians (nm)" in text
     assert "1 µm = 1000 nm" in text
-    assert "Diameter (nm)" in text
+    assert "values are physical nm" in text
+    assert "How to read this report" in text
     # per-image figures generated
     assert (out.parent / "images/PVDF Jose_01/figure-A-primary-histogram.png").exists()
     assert (out.parent / "dataset-figure-F.png").exists()
