@@ -17,16 +17,16 @@ Fathom Fibers combines a reviewable **PySide6 desktop application** with a **Qt-
 
 ## Download
 
-**v0.2.0-rc1** ships as portable native desktop builds. No Python installation is required.
+**v0.2.0-rc2** ships as portable native desktop builds. No Python installation is required.
 
 | Platform | Architecture | Package |
 |---|---:|---|
-| Linux | x86_64 | [FathomFibers-0.2.0-rc1-linux-x86_64.tar.gz](https://github.com/kegouro/fathom-fibers/releases/download/v0.2.0-rc1/FathomFibers-0.2.0-rc1-linux-x86_64.tar.gz) |
-| Windows | x86_64 / AMD64 | [FathomFibers-0.2.0-rc1-windows-amd64.zip](https://github.com/kegouro/fathom-fibers/releases/download/v0.2.0-rc1/FathomFibers-0.2.0-rc1-windows-amd64.zip) |
-| macOS | Apple Silicon (arm64) | [FathomFibers-0.2.0-rc1-macos-arm64.tar.gz](https://github.com/kegouro/fathom-fibers/releases/download/v0.2.0-rc1/FathomFibers-0.2.0-rc1-macos-arm64.tar.gz) |
-| macOS | Intel (x86_64) | [FathomFibers-0.2.0-rc1-macos-x86_64.tar.gz](https://github.com/kegouro/fathom-fibers/releases/download/v0.2.0-rc1/FathomFibers-0.2.0-rc1-macos-x86_64.tar.gz) |
+| Linux | x86_64 | [FathomFibers-0.2.0-rc2-linux-x86_64.tar.gz](https://github.com/kegouro/fathom-fibers/releases/download/v0.2.0-rc2/FathomFibers-0.2.0-rc2-linux-x86_64.tar.gz) |
+| Windows | x86_64 / AMD64 | [FathomFibers-0.2.0-rc2-windows-amd64.zip](https://github.com/kegouro/fathom-fibers/releases/download/v0.2.0-rc2/FathomFibers-0.2.0-rc2-windows-amd64.zip) |
+| macOS | Apple Silicon (arm64) | [FathomFibers-0.2.0-rc2-macos-arm64.tar.gz](https://github.com/kegouro/fathom-fibers/releases/download/v0.2.0-rc2/FathomFibers-0.2.0-rc2-macos-arm64.tar.gz) |
+| macOS | Intel (x86_64) | [FathomFibers-0.2.0-rc2-macos-x86_64.tar.gz](https://github.com/kegouro/fathom-fibers/releases/download/v0.2.0-rc2/FathomFibers-0.2.0-rc2-macos-x86_64.tar.gz) |
 
-Each archive is published with a matching `.sha256` sidecar. See the [release page](https://github.com/kegouro/fathom-fibers/releases/tag/v0.2.0-rc1) for notes and checksums.
+Each archive is published with a matching `.sha256` sidecar. See the [release page](https://github.com/kegouro/fathom-fibers/releases/tag/v0.2.0-rc2) for notes and checksums.
 
 After extracting the archive, launch the bundled `FathomFibers` executable (`FathomFibers.exe` on Windows).
 

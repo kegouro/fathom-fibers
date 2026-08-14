@@ -33,9 +33,9 @@ def test_embedded_metadata_takes_priority():
 def test_version_consistent():
     from fathom_fibers_quick import __version__
 
-    assert __version__ == "0.2.0rc1"
+    assert __version__ == "0.2.0rc2"
     pyproject = (REPO / "pyproject.toml").read_text()
-    assert 'version = "0.2.0rc1"' in pyproject
+    assert 'version = "0.2.0rc2"' in pyproject
 
 
 def test_version_cli_output():
@@ -48,7 +48,7 @@ def test_version_cli_output():
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "Fathom Fibers 0.2.0rc1" in result.stdout
+    assert "Fathom Fibers 0.2.0rc2" in result.stdout
     assert "commit " in result.stdout
     assert "platform " in result.stdout
 
@@ -56,11 +56,11 @@ def test_version_cli_output():
 def test_release_filename_scheme():
     import fathom_fibers_quick.release_scheme as scheme
 
-    assert scheme.archive_name("linux", "x86_64").startswith("FathomFibers-0.2.0-rc1-linux-x86_64")
+    assert scheme.archive_name("linux", "x86_64").startswith("FathomFibers-0.2.0-rc2-linux-x86_64")
     assert scheme.archive_name("windows", "x86_64").startswith(
-        "FathomFibers-0.2.0-rc1-windows-x86_64"
+        "FathomFibers-0.2.0-rc2-windows-x86_64"
     )
-    assert scheme.archive_name("macos", "arm64").startswith("FathomFibers-0.2.0-rc1-macos-arm64")
+    assert scheme.archive_name("macos", "arm64").startswith("FathomFibers-0.2.0-rc2-macos-arm64")
 
 
 def test_readme_first_exists_and_mentions_core_flow():

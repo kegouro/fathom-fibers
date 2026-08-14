@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0-rc2
+
+- diameter display standardized to nanometres;
+- Mean ± 1 SD summaries added;
+- histogram presentation updated to bars;
+- report interpretation notes improved;
+- README measurement-session image added;
+- no scientific estimator definitions changed.
+
 ## 0.2.0-rc1 (2026-08)
 
 - Dataset scientific workspace with Zeiss SEM calibration handling.

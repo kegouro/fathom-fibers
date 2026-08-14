@@ -217,7 +217,7 @@ def main() -> int:
         return 2
 
     commit = git_commit()
-    version = "0.2.0-rc1"
+    version = "0.2.0-rc2"
     artifact_name = f"FathomFibers-{version}-{platform_tag}"
 
     for directory in (DIST_DIR, BUILD_DIR):

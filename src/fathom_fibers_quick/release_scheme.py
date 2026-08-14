@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-VERSION = "0.2.0rc1"
-HUMAN_VERSION = "0.2.0-rc1"
+VERSION = "0.2.0rc2"
+HUMAN_VERSION = "0.2.0-rc2"
 PRODUCT = "Fathom Fibers"
 
 
