@@ -63,11 +63,7 @@ def validate_measurement_geometry(
 def format_length_m(value_m: float) -> str:
     if value_m >= 1e-3:
         return f"{value_m * 1e3:.3f} mm"
-    if value_m >= 1e-6:
-        return f"{value_m * 1e6:.3f} µm"
-    if value_m >= 1e-9:
-        return f"{value_m * 1e9:.1f} nm"
-    return f"{value_m:.3e} m"
+    return f"{value_m * 1e9:.1f} nm"
 
 
 def sample_profile(

@@ -932,7 +932,7 @@ class MainWindow(QMainWindow):
                 if cell.diameter is not None:
                     latest = cell
         if latest is not None and latest.diameter is not None:
-            self.manual_panel.flash_feedback(f"{latest.diameter:.3f} µm · Saved ✓")
+            self.manual_panel.flash_feedback(f"{latest.diameter * 1000.0:.3f} nm · Saved ✓")
 
     # ------------------------------------------------------------- session
 

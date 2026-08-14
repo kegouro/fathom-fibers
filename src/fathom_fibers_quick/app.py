@@ -1257,9 +1257,9 @@ class FiberQuickApp(tk.Tk):
             return
         stats = fiber_statistics(self.project.measurements)
         for fid, info in sorted(stats.items()):
-            med_str = f"{info['median_m'] * 1e6:.3f} µm" if info["median_m"] else "—"
-            min_str = f"{info['min_m'] * 1e6:.3f} µm" if info["min_m"] else "—"
-            max_str = f"{info['max_m'] * 1e6:.3f} µm" if info["max_m"] else "—"
+            med_str = f"{info['median_m'] * 1e9:.3f} nm" if info["median_m"] else "—"
+            min_str = f"{info['min_m'] * 1e9:.3f} nm" if info["min_m"] else "—"
+            max_str = f"{info['max_m'] * 1e9:.3f} nm" if info["max_m"] else "—"
             self.fiber_tree.insert("", tk.END, iid=fid, values=(fid, info["n"], med_str, min_str, max_str, "✓"))
 
     def _refresh_auto_tree(self) -> None:

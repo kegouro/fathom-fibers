@@ -47,15 +47,17 @@ After extracting the archive, launch the bundled `FathomFibers` executable (`Fat
 
 ![Scientific workspace with calibrated measurement](docs/assets/workspace.png)
 
+### Fiber measurement session
+
+![Fiber measurement session with calibrated overlays and results](docs/assets/sem-fiber-workspace-preview.jpeg)
+
+A live measurement session in the workspace: calibrated SEM image with measurement overlays and per-estimator diameter results.
+
 ### Built-in Quick Start
 
 ![Fathom Fibers Quick Start](docs/assets/quick-start.png)
 
-The screenshots are deliberately based on synthetic data so they can be regenerated in CI without the private validation corpus:
-
-```bash
-QT_QPA_PLATFORM=offscreen python scripts/capture_readme_screenshots.py
-```
+The `workspace.png` and `quick-start.png` screenshots are deliberately based on synthetic data so they can be regenerated without the private validation corpus.
 
 ## Start from source
 

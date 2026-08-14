@@ -146,8 +146,7 @@ class DatasetPanel(QWidget):
         if self.controller is None or self.controller.dataset is None:
             return False
         return all(
-            self.controller.cache.has_full(image.stem)
-            for image in self.controller.dataset.images
+            self.controller.cache.has_full(image.stem) for image in self.controller.dataset.images
         )
 
     def refresh(self) -> None:
@@ -290,9 +289,7 @@ class OverlayPanel(QWidget):
         if field is None:
             missing.append("Fathom Field")
         self.available_note.setText(
-            "Overlays require full method results for this image (Run Methods)."
-            if missing
-            else ""
+            "Overlays require full method results for this image (Run Methods)." if missing else ""
         )
 
 
@@ -320,11 +317,17 @@ class SummaryPanel(QWidget):
         body_height = image.footer_bounds[0] if image.footer_bounds else image.shape[0]
         lines = [
             f"<b>Image</b> {image.image_id}",
-            (f"<b>Calibration</b> {calibration.pixel_size_x_m * 1e9:.5g} × "
-             f"{calibration.pixel_size_y_m * 1e9:.5g} nm/px ({calibration.source})"),
+            (
+                f"<b>Calibration</b> {calibration.pixel_size_x_m * 1e9:.5g} × "
+                f"{calibration.pixel_size_y_m * 1e9:.5g} nm/px ({calibration.source})"
+            ),
             (
                 f"<b>Valid ROI</b> 0, 0 → {image.shape[1]}, {body_height} px"
-                + (f" (footer excluded from row {image.footer_bounds[0]})" if image.footer_bounds else "")
+                + (
+                    f" (footer excluded from row {image.footer_bounds[0]})"
+                    if image.footer_bounds
+                    else ""
+                )
             ),
         ]
         if metadata.get("ap_mag") is not None:
@@ -373,25 +376,39 @@ class SummaryPanel(QWidget):
         statistics = result.native_statistics
         smooth_coverage = statistics.get("smooth_coverage_fraction")
         raw_rows = [
-            ("Fathom Field / Raw EDT", result.common_distribution,
-             "—", result.status.value),
-            ("Fathom Field / Raw Edge",
-             result.secondary_distributions.get("FATHOM_FIELD_PAIRED_EDGE_DIAMETER"),
-             _frac(statistics.get("edge_acceptance_fraction")), result.status.value),
-            ("Fathom Field / Raw Profile",
-             result.secondary_distributions.get("FATHOM_FIELD_PROFILE_DIAMETER"),
-             _frac(statistics.get("profile_acceptance_fraction")), result.status.value),
+            ("Fathom Field / Raw EDT", result.common_distribution, "—", result.status.value),
+            (
+                "Fathom Field / Raw Edge",
+                result.secondary_distributions.get("FATHOM_FIELD_PAIRED_EDGE_DIAMETER"),
+                _frac(statistics.get("edge_acceptance_fraction")),
+                result.status.value,
+            ),
+            (
+                "Fathom Field / Raw Profile",
+                result.secondary_distributions.get("FATHOM_FIELD_PROFILE_DIAMETER"),
+                _frac(statistics.get("profile_acceptance_fraction")),
+                result.status.value,
+            ),
         ]
         ribbon_rows = [
-            ("Fathom Field / Ribbon EDT",
-             result.secondary_distributions.get("FATHOM_FIELD_REFINED_EDT_DIAMETER"),
-             _frac(smooth_coverage), "EXPERIMENTAL"),
-            ("Fathom Field / Ribbon Edge",
-             result.secondary_distributions.get("FATHOM_FIELD_REFINED_EDGE_DIAMETER"),
-             _frac(statistics.get("refined_edge_acceptance_fraction")), "EXPERIMENTAL"),
-            ("Fathom Field / Ribbon Profile",
-             result.secondary_distributions.get("FATHOM_FIELD_REFINED_PROFILE_DIAMETER"),
-             _frac(statistics.get("refined_profile_acceptance_fraction")), "EXPERIMENTAL"),
+            (
+                "Fathom Field / Ribbon EDT",
+                result.secondary_distributions.get("FATHOM_FIELD_REFINED_EDT_DIAMETER"),
+                _frac(smooth_coverage),
+                "EXPERIMENTAL",
+            ),
+            (
+                "Fathom Field / Ribbon Edge",
+                result.secondary_distributions.get("FATHOM_FIELD_REFINED_EDGE_DIAMETER"),
+                _frac(statistics.get("refined_edge_acceptance_fraction")),
+                "EXPERIMENTAL",
+            ),
+            (
+                "Fathom Field / Ribbon Profile",
+                result.secondary_distributions.get("FATHOM_FIELD_REFINED_PROFILE_DIAMETER"),
+                _frac(statistics.get("refined_profile_acceptance_fraction")),
+                "EXPERIMENTAL",
+            ),
         ]
         rows: list[tuple[str, ...]] = []
         for name, distribution, coverage, status in raw_rows + ribbon_rows:
@@ -421,13 +438,29 @@ class SummaryPanel(QWidget):
             distribution = result.native_distribution
         if distribution is None:
             if result.method_id == MethodId.MATLAB_SIMPOLY:
-                value = (
-                    _fmt(result.native_result)
-                    if result.native_result is not None
-                    else "—"
+                value = _fmt(result.native_result) if result.native_result is not None else "—"
+                return (
+                    method_display_name(result.method_id),
+                    result.status.value,
+                    "—",
+                    "—",
+                    "Native b1: " + value,
+                    "—",
+                    "—",
+                    "—",
+                    "—",
                 )
-                return (method_display_name(result.method_id), result.status.value, "—", "—", "Native b1: " + value, "—", "—", "—", "—")
-            return (method_display_name(result.method_id), result.status.value, "—", "—", "—", "—", "—", "—", "—")
+            return (
+                method_display_name(result.method_id),
+                result.status.value,
+                "—",
+                "—",
+                "—",
+                "—",
+                "—",
+                "—",
+                "—",
+            )
         summary = summarize_distribution(distribution)
         return (
             method_display_name(result.method_id),
@@ -452,8 +485,12 @@ class MethodsPanel(QWidget):
             ["Method", "Status", "Capabilities", "Native estimand", "Runtime s", "Flags"]
         )
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
         self.details = QTextBrowser()
         self.details.setMinimumHeight(180)
         split = QVBoxLayout(self)
@@ -467,17 +504,22 @@ class MethodsPanel(QWidget):
         if comparison is not None:
             for result in comparison.results:
                 self._results[result.method_id.value] = result
-                capabilities = ", ".join(
-                    capability.value.replace("_", " ")
-                    for capability, state in result.capabilities.states.items()
-                    if state.value == "AVAILABLE"
-                ) or "—"
+                capabilities = (
+                    ", ".join(
+                        capability.value.replace("_", " ")
+                        for capability, state in result.capabilities.states.items()
+                        if state.value == "AVAILABLE"
+                    )
+                    or "—"
+                )
                 rows.append(
                     (
                         method_display_name(result.method_id),
                         result.status.value,
                         capabilities,
-                        result.native_estimand.value.replace("_", " ") if result.native_estimand else "—",
+                        result.native_estimand.value.replace("_", " ")
+                        if result.native_estimand
+                        else "—",
                         _fmt(result.runtime_seconds),
                         ", ".join(result.quality_flags) or "—",
                     )
@@ -528,23 +570,35 @@ class MethodsPanel(QWidget):
                 "Graph reconstruction, fiber instances and ML are not implemented.</p>"
             )
         if result.method_id == MethodId.PYTHON_SIMPOLY:
-            lines.append(
-                "<p><b>Known limitation:</b> KNOWN_LIBRARY_DIVERGENCE — bwskel.</p>"
-            )
+            lines.append("<p><b>Known limitation:</b> KNOWN_LIBRARY_DIVERGENCE — bwskel.</p>")
         if provenance:
-            details = "<br>".join(
-                f"{key}: {value}" for key, value in sorted(provenance.items())
-            )
+            details = "<br>".join(f"{key}: {value}" for key, value in sorted(provenance.items()))
             lines.append(f"<p><b>Provenance</b><br><pre>{details}</pre></p>")
         self.details.setHtml("<br>".join(lines))
 
 
 class FieldSamplesModel(QAbstractTableModel):
     HEADERS = (
-        "ID", "x (µm)", "y (µm)", "d_EDT (µm)", "d_edge (µm)", "d_profile (µm)",
-        "r− (µm)", "r+ (µm)", "asymmetry", "coherence", "profile conf.", "arc weight (µm)",
-        "status", "flags",
-        "refined EDT", "refined Edge", "refined Profile", "residual shift", "refinement", "segment",
+        "ID",
+        "x (µm)",
+        "y (µm)",
+        "d_EDT (nm)",
+        "d_edge (nm)",
+        "d_profile (nm)",
+        "r− (nm)",
+        "r+ (nm)",
+        "asymmetry",
+        "coherence",
+        "profile conf.",
+        "arc weight (µm)",
+        "status",
+        "flags",
+        "refined EDT (nm)",
+        "refined Edge (nm)",
+        "refined Profile (nm)",
+        "residual shift",
+        "refinement",
+        "segment",
     )
 
     def __init__(self, parent=None) -> None:
@@ -595,15 +649,15 @@ class FieldSamplesModel(QAbstractTableModel):
         if column == 2:
             return _fmt(self.get("y_m")[row] * 1e6)
         if column == 3:
-            return _fmt(self.get("diameter_um")[row])
+            return _fmt(self.get("diameter_um")[row] * 1000.0)
         if column == 4:
-            return _fmt(self.get("edge_diameter_um")[row])
+            return _fmt(self.get("edge_diameter_um")[row] * 1000.0)
         if column == 5:
-            return _fmt(self.get("profile_diameter_um")[row])
+            return _fmt(self.get("profile_diameter_um")[row] * 1000.0)
         if column == 6:
-            return _fmt(self.get("radius_minus_um")[row])
+            return _fmt(self.get("radius_minus_um")[row] * 1000.0)
         if column == 7:
-            return _fmt(self.get("radius_plus_um")[row])
+            return _fmt(self.get("radius_plus_um")[row] * 1000.0)
         if column == 8:
             return _fmt(self.get("edge_asymmetry")[row], 4)
         if column == 9:
@@ -620,11 +674,11 @@ class FieldSamplesModel(QAbstractTableModel):
             flags = self.get("edge_flags")
             return flags[row] if flags.size else "—"
         if column == 14:
-            return _fmt(self.get("refined_edt_um")[row])
+            return _fmt(self.get("refined_edt_um")[row] * 1000.0)
         if column == 15:
-            return _fmt(self.get("refined_edge_um")[row])
+            return _fmt(self.get("refined_edge_um")[row] * 1000.0)
         if column == 16:
-            return _fmt(self.get("refined_profile_um")[row])
+            return _fmt(self.get("refined_profile_um")[row] * 1000.0)
         if column == 17:
             return _fmt(self.get("residual_center_shift_um")[row])
         if column == 18:
@@ -658,7 +712,9 @@ class FieldSamplesFilter(QSortFilterProxyModel):
         if (
             self.min_coherence > 0
             and coherence.size
-            and (not np.isfinite(coherence[source_row]) or coherence[source_row] < self.min_coherence)
+            and (
+                not np.isfinite(coherence[source_row]) or coherence[source_row] < self.min_coherence
+            )
         ):
             return False
         if self.mode == "accepted":
@@ -671,7 +727,7 @@ class FieldSamplesFilter(QSortFilterProxyModel):
 
 
 class LocalSectionsModel(QAbstractTableModel):
-    HEADERS = ("ID", "x (µm)", "y (µm)", "width (µm)", "flags")
+    HEADERS = ("ID", "x (µm)", "y (µm)", "width (nm)", "flags")
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -708,7 +764,7 @@ class LocalSectionsModel(QAbstractTableModel):
         if index.column() == 2:
             return _fmt(float(np.asarray(self.samples["section_y0_px"])[row]))
         if index.column() == 3:
-            return _fmt(float(np.asarray(self.samples["section_width_um"])[row]))
+            return _fmt(float(np.asarray(self.samples["section_width_um"])[row]) * 1000.0)
         if index.column() == 4:
             return str(np.asarray(self.samples["section_flags"])[row])
         return None
@@ -815,10 +871,18 @@ class MeasurementsPanel(QWidget):
         if source == "Fathom Field samples":
             n = self.field_model.n
             accepted = int(np.sum(self.field_model.get("edge_accepted"))) if n else 0
-            self.info.setText(f"{n} local samples · {accepted} paired-edge accepted" if n else "Fathom Field not computed for this image (Run Methods).")
+            self.info.setText(
+                f"{n} local samples · {accepted} paired-edge accepted"
+                if n
+                else "Fathom Field not computed for this image (Run Methods)."
+            )
         elif source == "Fathom Local sections":
             n = self.local_model.rowCount()
-            self.info.setText(f"{n} Fathom Local cross-sections" if n else "Fathom Local not computed for this image (Run Methods).")
+            self.info.setText(
+                f"{n} Fathom Local cross-sections"
+                if n
+                else "Fathom Local not computed for this image (Run Methods)."
+            )
         else:
             self.info.setText("Manual 5×5 measurements on the current image.")
 
@@ -920,15 +984,49 @@ class QualityPanel(QWidget):
             "Supported centerline coverage",
             _frac(statistics.get("smooth_coverage_fraction")),
         )
-        row("Original center shift · median", _fmt(statistics.get("refine_median_shift_um")) + " µm")
+        row(
+            "Original center shift · median", _fmt(statistics.get("refine_median_shift_um")) + " µm"
+        )
         row("Original center shift · P90", _fmt(statistics.get("refine_p90_shift_um")) + " µm")
-        row("Residual center shift · median", _fmt(statistics.get("refined_residual_shift_median_um")) + " µm")
-        row("Residual center shift · P90", _fmt(statistics.get("refined_residual_shift_p90_um")) + " µm")
-        row("Asymmetry raw → refined", _fmt(statistics.get("edge_median_asymmetry"), 4) + " → " + _fmt(statistics.get("refined_asymmetry_median"), 4))
-        row("Edge acceptance raw → refined", _frac(statistics.get("edge_acceptance_fraction")) + " → " + _frac(statistics.get("refined_edge_acceptance_fraction")))
-        row("Profile acceptance raw → refined", _frac(statistics.get("profile_acceptance_fraction")) + " → " + _frac(statistics.get("refined_profile_acceptance_fraction")))
+        row(
+            "Residual center shift · median",
+            _fmt(statistics.get("refined_residual_shift_median_um")) + " µm",
+        )
+        row(
+            "Residual center shift · P90",
+            _fmt(statistics.get("refined_residual_shift_p90_um")) + " µm",
+        )
+        row(
+            "Asymmetry raw → refined",
+            _fmt(statistics.get("edge_median_asymmetry"), 4)
+            + " → "
+            + _fmt(statistics.get("refined_asymmetry_median"), 4),
+        )
+        row(
+            "Edge acceptance raw → refined",
+            _frac(statistics.get("edge_acceptance_fraction"))
+            + " → "
+            + _frac(statistics.get("refined_edge_acceptance_fraction")),
+        )
+        row(
+            "Profile acceptance raw → refined",
+            _frac(statistics.get("profile_acceptance_fraction"))
+            + " → "
+            + _frac(statistics.get("refined_profile_acceptance_fraction")),
+        )
         row("Refinement segments", str(statistics.get("smooth_segment_count", "—")))
-        ribbon_flags = [flag for flag in field.quality_flags if flag not in {"EXPERIMENTAL_FIELD_MEASURING", "FIELD_STAGE_IMPLEMENTED", "GRAPH_STAGE_NOT_IMPLEMENTED", "SMOOTH_CENTERLINE_V1", "REFINED_REMEASUREMENT"}]
+        ribbon_flags = [
+            flag
+            for flag in field.quality_flags
+            if flag
+            not in {
+                "EXPERIMENTAL_FIELD_MEASURING",
+                "FIELD_STAGE_IMPLEMENTED",
+                "GRAPH_STAGE_NOT_IMPLEMENTED",
+                "SMOOTH_CENTERLINE_V1",
+                "REFINED_REMEASUREMENT",
+            }
+        ]
         row("Flags", ", ".join(ribbon_flags) or "—")
         self.ribbon_table.setRowCount(len(rows))
         for row_index, (label, value) in enumerate(rows):
@@ -941,7 +1039,9 @@ class QualityPanel(QWidget):
         if result.method_id == MethodId.FATHOM_FIELD_GRAPH_V1:
             statistics = result.native_statistics
             samples = result.local_samples
-            raw = statistics.get("edge_raw_count", len(samples.get("edge_diameter_um", [])) if samples else 0)
+            raw = statistics.get(
+                "edge_raw_count", len(samples.get("edge_diameter_um", [])) if samples else 0
+            )
             accepted = statistics.get("edge_accepted_count", 0)
             acceptance = statistics.get("edge_acceptance_fraction")
             coherence = statistics.get("mean_coherence")
@@ -951,7 +1051,10 @@ class QualityPanel(QWidget):
                 str(accepted),
                 "—" if acceptance is None else f"{acceptance:.2%}",
                 "—" if coherence is None else f"{coherence:.4g}",
-                ", ".join(flag for flag in result.quality_flags if flag != "EXPERIMENTAL_FIELD_MEASURING") or "—",
+                ", ".join(
+                    flag for flag in result.quality_flags if flag != "EXPERIMENTAL_FIELD_MEASURING"
+                )
+                or "—",
             )
         distribution = result.common_distribution
         if result.method_id == MethodId.MANUAL_5X5_REFERENCE:
@@ -1170,7 +1273,8 @@ class Manual5x5Panel(QWidget):
             return
         self._refresh_grid()
         self.set_progress(
-            int(getattr(self, "_image_index", 1)), int(getattr(self, "_image_count", 1)),
+            int(getattr(self, "_image_index", 1)),
+            int(getattr(self, "_image_count", 1)),
             int(getattr(self, "_dataset_total", 0)),
         )
 
@@ -1211,7 +1315,11 @@ class WorkspaceInspector(QWidget):
         self.tabs.setCurrentIndex(0)
 
     def set_field_sample(self, samples: dict[str, np.ndarray] | None, index: int | None) -> None:
-        if samples is None or index is None or not 0 <= index < int(next(iter(samples.values())).size if samples else 0):
+        if (
+            samples is None
+            or index is None
+            or not 0 <= index < int(next(iter(samples.values())).size if samples else 0)
+        ):
             self.clear()
             return
 
@@ -1249,22 +1357,48 @@ class WorkspaceInspector(QWidget):
         is_refined = bool(refined_mask) if refined_mask is not None else False
         refinement_rows = [
             ("Status", "Refined" if is_refined else "Not refined"),
-            ("Segment ID", str(int(segment_id)) if segment_id is not None and segment_id >= 0 else "—"),
-            ("Original center", f"x {x_m * 1e6:.4g} µm · y {y_m * 1e6:.4g} µm" if x_m is not None else "—"),
-            ("Refined center", f"x {refined_x * 1e6:.4g} µm · y {refined_y * 1e6:.4g} µm" if is_refined and refined_x is not None else "—"),
+            (
+                "Segment ID",
+                str(int(segment_id)) if segment_id is not None and segment_id >= 0 else "—",
+            ),
+            (
+                "Original center",
+                f"x {x_m * 1e6:.4g} µm · y {y_m * 1e6:.4g} µm" if x_m is not None else "—",
+            ),
+            (
+                "Refined center",
+                f"x {refined_x * 1e6:.4g} µm · y {refined_y * 1e6:.4g} µm"
+                if is_refined and refined_x is not None
+                else "—",
+            ),
             ("Observed shift", f"{_fmt(observed_shift)} µm"),
             ("Residual shift", f"{_fmt(residual_shift)} µm"),
             ("Residual normal", f"{_fmt(residual_normal)} µm"),
             ("Residual tangential", f"{_fmt(residual_tangent)} µm"),
-            ("Shift / local diameter", _fmt(observed_shift / value("edge_diameter_um"), 4) if observed_shift is not None and value("edge_diameter_um") else "—"),
+            (
+                "Shift / local diameter",
+                _fmt(observed_shift / value("edge_diameter_um"), 4)
+                if observed_shift is not None and value("edge_diameter_um")
+                else "—",
+            ),
             ("Refinement confidence", _fmt(refine_confidence, 4)),
             ("Orientation disagreement", f"{_fmt(axis_disagreement, 4)}°"),
-            ("Refined edge status", "accepted" if refined_edge_accepted else "rejected" if refined_edge_accepted is not None else "—"),
+            (
+                "Refined edge status",
+                "accepted"
+                if refined_edge_accepted
+                else "rejected"
+                if refined_edge_accepted is not None
+                else "—",
+            ),
             ("Refined flags", refined_flags.replace(";", " · ") or "—"),
         ]
 
         rows = [
-            ("Position", f"x {x_m * 1e6:.4g} µm · y {y_m * 1e6:.4g} µm" if x_m is not None else "—"),
+            (
+                "Position",
+                f"x {x_m * 1e6:.4g} µm · y {y_m * 1e6:.4g} µm" if x_m is not None else "—",
+            ),
             ("Orientation θ", f"{np.degrees(theta):.3g}°" if theta is not None else "—"),
             ("Coherence", _fmt(coherence, 4)),
             ("d_EDT", f"{_fmt(value('diameter_um'))} µm"),
@@ -1274,7 +1408,10 @@ class WorkspaceInspector(QWidget):
             ("r+", f"{_fmt(value('radius_plus_um'))} µm"),
             ("Asymmetry", _fmt(value("edge_asymmetry"), 4)),
             ("Arc-length weight", f"{_fmt(value('arc_length_weight_m') * 1e6)} µm"),
-            ("Paired-edge status", "accepted" if edge_accepted else "rejected" if edge_accepted is not None else "—"),
+            (
+                "Paired-edge status",
+                "accepted" if edge_accepted else "rejected" if edge_accepted is not None else "—",
+            ),
             ("Edge flags", edge_flags.replace(";", " · ") or "—"),
             ("Profile flags", profile_flags.replace(";", " · ") or "—"),
             ("Profile confidence", _fmt(value("profile_gradient_snr"), 4)),
@@ -1288,18 +1425,36 @@ class WorkspaceInspector(QWidget):
             + _table(refinement_rows)
             + "<h3 style='font-size:12px;margin:.2em 0'>RAW VS REFINED WIDTHS</h3>"
             + "<table><tr><th></th><th>Raw</th><th>Refined</th></tr>"
-            + "<tr><td>EDT</td><td>" + _fmt(value("diameter_um")) + " µm</td><td>"
-            + _fmt(value("refined_edt_um")) + " µm</td></tr>"
-            + "<tr><td>Edge</td><td>" + _fmt(value("edge_diameter_um")) + " µm</td><td>"
-            + _fmt(value("refined_edge_um")) + " µm</td></tr>"
-            + "<tr><td>Profile</td><td>" + _fmt(value("profile_diameter_um")) + " µm</td><td>"
-            + _fmt(value("refined_profile_um")) + " µm</td></tr>"
-            + "<tr><td>r−</td><td>" + _fmt(value("radius_minus_um")) + " µm</td><td>"
-            + _fmt(value("refined_r_minus_um")) + " µm</td></tr>"
-            + "<tr><td>r+</td><td>" + _fmt(value("radius_plus_um")) + " µm</td><td>"
-            + _fmt(value("refined_r_plus_um")) + " µm</td></tr>"
-            + "<tr><td>Asymmetry</td><td>" + _fmt(value("edge_asymmetry"), 4) + "</td><td>"
-            + _fmt(value("refined_asymmetry"), 4) + "</td></tr></table>"
+            + "<tr><td>EDT</td><td>"
+            + _fmt(value("diameter_um"))
+            + " µm</td><td>"
+            + _fmt(value("refined_edt_um"))
+            + " µm</td></tr>"
+            + "<tr><td>Edge</td><td>"
+            + _fmt(value("edge_diameter_um"))
+            + " µm</td><td>"
+            + _fmt(value("refined_edge_um"))
+            + " µm</td></tr>"
+            + "<tr><td>Profile</td><td>"
+            + _fmt(value("profile_diameter_um"))
+            + " µm</td><td>"
+            + _fmt(value("refined_profile_um"))
+            + " µm</td></tr>"
+            + "<tr><td>r−</td><td>"
+            + _fmt(value("radius_minus_um"))
+            + " µm</td><td>"
+            + _fmt(value("refined_r_minus_um"))
+            + " µm</td></tr>"
+            + "<tr><td>r+</td><td>"
+            + _fmt(value("radius_plus_um"))
+            + " µm</td><td>"
+            + _fmt(value("refined_r_plus_um"))
+            + " µm</td></tr>"
+            + "<tr><td>Asymmetry</td><td>"
+            + _fmt(value("edge_asymmetry"), 4)
+            + "</td><td>"
+            + _fmt(value("refined_asymmetry"), 4)
+            + "</td></tr></table>"
         )
         measurement_rows = [
             ("d_EDT", _fmt(value("diameter_um")), "µm"),
@@ -1311,14 +1466,20 @@ class WorkspaceInspector(QWidget):
         ]
         self.measurements.setHtml(
             "<table><tr><th>Quantity</th><th>Value</th><th>Unit</th></tr>"
-            + "".join(f"<tr><td>{name}</td><td>{value}</td><td>{unit}</td></tr>" for name, value, unit in measurement_rows)
+            + "".join(
+                f"<tr><td>{name}</td><td>{value}</td><td>{unit}</td></tr>"
+                for name, value, unit in measurement_rows
+            )
             + "</table>"
         )
         self.quality.setHtml(
             _table(
                 [
                     ("Coherence", _fmt(coherence, 4)),
-                    ("Paired-edge accepted", "yes" if edge_accepted else "no" if edge_accepted is not None else "—"),
+                    (
+                        "Paired-edge accepted",
+                        "yes" if edge_accepted else "no" if edge_accepted is not None else "—",
+                    ),
                     ("Edge flags", edge_flags.replace(";", " · ") or "—"),
                     ("Profile flags", profile_flags.replace(";", " · ") or "—"),
                     ("Profile confidence", _fmt(value("profile_gradient_snr"), 4)),
@@ -1339,14 +1500,20 @@ class WorkspaceInspector(QWidget):
             ("Unit", result.unit),
             ("Runtime s", _fmt(result.runtime_seconds)),
         ]
-        rows += [(key, _fmt(value, 6) if isinstance(value, float) else str(value)) for key, value in sorted(result.provenance.items())]
+        rows += [
+            (key, _fmt(value, 6) if isinstance(value, float) else str(value))
+            for key, value in sorted(result.provenance.items())
+        ]
         self.provenance.setHtml(_table(rows))
 
 
 def _table(rows: list[tuple[str, Any]]) -> str:
     return (
         "<table>"
-        + "".join(f"<tr><th align='left' valign='top'>{key}</th><td>{value}</td></tr>" for key, value in rows)
+        + "".join(
+            f"<tr><th align='left' valign='top'>{key}</th><td>{value}</td></tr>"
+            for key, value in rows
+        )
         + "</table>"
     )
 
@@ -1394,8 +1561,12 @@ class DistributionsPanel(QWidget):
 
     PRESETS: ClassVar[dict[str, frozenset[str]]] = {
         "ALL METHODS": frozenset(),
-        "FIELD RAW": frozenset({"Fathom Field (EDT)", "Field Paired Edge", "Field Intensity Profile"}),
-        "FIELD RIBBON": frozenset({"Ribbon Refined EDT", "Ribbon Refined Edge", "Ribbon Refined Profile"}),
+        "FIELD RAW": frozenset(
+            {"Fathom Field (EDT)", "Field Paired Edge", "Field Intensity Profile"}
+        ),
+        "FIELD RIBBON": frozenset(
+            {"Ribbon Refined EDT", "Ribbon Refined Edge", "Ribbon Refined Profile"}
+        ),
         "RAW vs REFINED EDT": frozenset({"Fathom Field (EDT)", "Ribbon Refined EDT"}),
         "RAW vs REFINED EDGE": frozenset({"Field Paired Edge", "Ribbon Refined Edge"}),
         "RAW vs REFINED PROFILE": frozenset({"Field Intensity Profile", "Ribbon Refined Profile"}),
@@ -1440,14 +1611,18 @@ class DistributionsPanel(QWidget):
             ["Series", "N", "Mean", "Median", "IQR", "P05", "P95"]
         )
         self.summary_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.summary_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.summary_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
 
         self.agreement_table = QTableWidget(0, 5)
         self.agreement_table.setHorizontalHeaderLabels(
             ["A", "B", "Wasserstein-1", "KS", "Median Δ"]
         )
         self.agreement_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.agreement_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.agreement_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
 
         tabs = QTabWidget()
         tabs.addTab(self.summary_table, "Distribution summary")
@@ -1465,7 +1640,11 @@ class DistributionsPanel(QWidget):
         matlab = None
         if comparison is not None:
             matlab = next(
-                (result for result in comparison.results if result.method_id == MethodId.MATLAB_SIMPOLY),
+                (
+                    result
+                    for result in comparison.results
+                    if result.method_id == MethodId.MATLAB_SIMPOLY
+                ),
                 None,
             )
         if matlab is not None and matlab.common_distribution is None:
@@ -1500,9 +1679,7 @@ class DistributionsPanel(QWidget):
     def _refresh_plots(self, *_args, preset: set[str] | None = None) -> None:
         if preset is not None:
             series = [
-                (name, distribution)
-                for name, distribution in self._all_series()
-                if name in preset
+                (name, distribution) for name, distribution in self._all_series() if name in preset
             ]
         else:
             series = self._selected_series()
@@ -1668,7 +1845,11 @@ class ImageSummaryPanel(QWidget):
                 f"edge acceptance {_frac(statistics.get('edge_acceptance_fraction'))} → "
                 f"{_frac(statistics.get('refined_edge_acceptance_fraction'))}"
             )
-            median = float(np.nanmedian(field.local_samples["refined_edge_um"])) if np.any(field.local_samples["refined_edge_accepted"]) else None
+            median = (
+                float(np.nanmedian(field.local_samples["refined_edge_um"]))
+                if np.any(field.local_samples["refined_edge_accepted"])
+                else None
+            )
             self.median_label.setText(_fmt(median))
             self.median_caption.setText("median Ribbon edge diameter (µm)")
         else:
@@ -1687,7 +1868,9 @@ class ReportHeaderPanel(QWidget):
         super().__init__(parent)
         title = QLabel("SCIENTIFIC REPORT")
         title.setProperty("role", "section")
-        subtitle = QLabel("Generate the deliverable HTML report and export results for the dataset.")
+        subtitle = QLabel(
+            "Generate the deliverable HTML report and export results for the dataset."
+        )
         subtitle.setProperty("role", "caption")
         subtitle.setWordWrap(True)
         self.dataset_button = QPushButton("Generate Dataset Scientific Report")
@@ -1713,73 +1896,74 @@ class ReportHeaderPanel(QWidget):
 def method_entries() -> list[tuple[str, str, str, str]]:
     """Structured methods overview data shared by the in-app help dialogs."""
     return [
+        (
+            "MATLAB SIMPoly",
+            "Native MATLAB SIMPoly consumed from the validated oracle cache.",
+            "COMPLETE (cache)",
             (
-                "MATLAB SIMPoly",
-                "Native MATLAB SIMPoly consumed from the validated oracle cache.",
-                "COMPLETE (cache)",
-                (
-                    "<p>Native Gaussian center b1 reported. The common distribution is unavailable "
-                    "from the current cache; no histogram is fabricated.</p>"
-                ),
+                "<p>Native Gaussian center b1 reported. The common distribution is unavailable "
+                "from the current cache; no histogram is fabricated.</p>"
             ),
+        ),
+        (
+            "Python SIMPoly",
+            "Python port of SIMPoly: calibrated length-weighted diameters on the skeleton.",
+            "PARTIAL",
+            ("<p>Known limitation: KNOWN_LIBRARY_DIVERGENCE — bwskel.</p>"),
+        ),
+        (
+            "Fathom Local",
+            "Assisted-ROI candidate cross-section metrology.",
+            "COMPLETE",
             (
-                "Python SIMPoly",
-                "Python port of SIMPoly: calibrated length-weighted diameters on the skeleton.",
-                "PARTIAL",
-                ("<p>Known limitation: KNOWN_LIBRARY_DIVERGENCE — bwskel.</p>"),
+                "<p>Local fiber candidates with proposed cross-sections; automatic results "
+                "require review.</p>"
             ),
+        ),
+        (
+            "Fathom Field",
+            "Structure-tensor orientation, anisotropic EDT and paired boundary metrology.",
+            "EXPERIMENTAL",
             (
-                "Fathom Local",
-                "Assisted-ROI candidate cross-section metrology.",
-                "COMPLETE",
-                (
-                    "<p>Local fiber candidates with proposed cross-sections; automatic results "
-                    "require review.</p>"
-                ),
+                "<p><b>EDT</b> — Twice the physical distance from the sampled centerline to the "
+                "nearest background boundary.<br>"
+                "<b>Paired Edge</b> — Distance between both local mask boundaries measured along "
+                "the local fiber normal.<br>"
+                "<b>Intensity Profile</b> — Paired-edge width refined against local subpixel "
+                "gradient transitions in the raw SEM image.<br>"
+                "No estimator is called best. Graph reconstruction and fiber instances are not "
+                "implemented.</p>"
             ),
+        ),
+        (
+            "Oriented Ribbon V1",
+            "Experimental refined centerline from paired opposite boundaries.",
+            "EXPERIMENTAL",
             (
-                "Fathom Field",
-                "Structure-tensor orientation, anisotropic EDT and paired boundary metrology.",
-                "EXPERIMENTAL",
-                (
-                    "<p><b>EDT</b> — Twice the physical distance from the sampled centerline to the "
-                    "nearest background boundary.<br>"
-                    "<b>Paired Edge</b> — Distance between both local mask boundaries measured along "
-                    "the local fiber normal.<br>"
-                    "<b>Intensity Profile</b> — Paired-edge width refined against local subpixel "
-                    "gradient transitions in the raw SEM image.<br>"
-                    "No estimator is called best. Graph reconstruction and fiber instances are not "
-                    "implemented.</p>"
-                ),
+                "<p><b>EXPERIMENTAL</b> — geometric centerline refinement from paired opposite "
+                "boundaries: local midpoints, a confidence-weighted smooth centerline on "
+                "non-branching runs, then re-measurement of EDT, paired-edge and profile along "
+                "it. Validated on known-truth synthetic geometry; real SEM results represent "
+                "method behavior/agreement, not known absolute accuracy.</p>"
             ),
+        ),
+        (
+            "Manual 5×5",
+            "Operator reference grid: 25 perpendicular width measurements per image.",
+            "REFERENCE",
             (
-                "Oriented Ribbon V1",
-                "Experimental refined centerline from paired opposite boundaries.",
-                "EXPERIMENTAL",
-                (
-                    "<p><b>EXPERIMENTAL</b> — geometric centerline refinement from paired opposite "
-                    "boundaries: local midpoints, a confidence-weighted smooth centerline on "
-                    "non-branching runs, then re-measurement of EDT, paired-edge and profile along "
-                    "it. Validated on known-truth synthetic geometry; real SEM results represent "
-                    "method behavior/agreement, not known absolute accuracy.</p>"
-                ),
+                "<p>Sparse human reference; never ground truth. Missing measurements are never "
+                "filled in.</p>"
             ),
-            (
-                "Manual 5×5",
-                "Operator reference grid: 25 perpendicular width measurements per image.",
-                "REFERENCE",
-                (
-                    "<p>Sparse human reference; never ground truth. Missing measurements are never "
-                    "filled in.</p>"
-                ),
-            ),
-            (
-                "Consensus",
-                "Equal-method quantile pseudo-reference across participating methods.",
-                "REFERENCE",
-                ("<p>Not ground truth. Field estimator variants do not add independent votes.</p>"),
-            ),
-        ]
+        ),
+        (
+            "Consensus",
+            "Equal-method quantile pseudo-reference across participating methods.",
+            "REFERENCE",
+            ("<p>Not ground truth. Field estimator variants do not add independent votes.</p>"),
+        ),
+    ]
+
 
 class MethodsOverviewDialog(QDialog):
     """Structured methods overview: name, purpose, status, detailed info."""
@@ -1796,14 +1980,16 @@ class MethodsOverviewDialog(QDialog):
         self.list = QTableWidget(0, 3)
         self.list.setHorizontalHeaderLabels(["Method", "Purpose", "Status"])
         self.list.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.list.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.list.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
         self.list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.list.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.list.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
         self.list.cellDoubleClicked.connect(self._show_details)
         layout.addWidget(self.list, 1)
-        info = QLabel(
-            "Double-click a row for the full scientific description, including caveats."
-        )
+        info = QLabel("Double-click a row for the full scientific description, including caveats.")
         info.setProperty("role", "caption")
         layout.addWidget(info)
         self._populate()

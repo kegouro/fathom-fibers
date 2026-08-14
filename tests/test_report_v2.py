@@ -101,10 +101,10 @@ def test_image_report_numerical_invariance():
     }
     for key, distribution in expected.items():
         summary = summarize_distribution(distribution)
-        median_text = f"{summary.weighted_median:.5g}"
+        median_text = f"{summary.weighted_median * 1000.0:.5g}"
         # median must appear in the report (either in the summary cards or tables)
         assert median_text in text, (key, median_text)
-        p95_text = f"{summary.p95:.5g}"
+        p95_text = f"{summary.p95 * 1000.0:.5g}"
         assert p95_text in text, (key, p95_text)
 
 
@@ -128,6 +128,12 @@ def test_dataset_report_sections():
         assert needle in text, needle
     # 16 image sections with anchors
     assert text.count("id='image-") == 16
+    # diameters are reported in nanometres with an explicit mean ± 1 SD summary
+    assert "Mean of image medians ± 1 SD (nm)" in text
+    assert "Mean ± 1 SD (nm)" in text
+    assert "Median of image medians (nm)" in text
+    assert "1 µm = 1000 nm" in text
+    assert "Diameter (nm)" in text
     # per-image figures generated
     assert (out.parent / "images/PVDF Jose_01/figure-A-primary-histogram.png").exists()
     assert (out.parent / "dataset-figure-F.png").exists()

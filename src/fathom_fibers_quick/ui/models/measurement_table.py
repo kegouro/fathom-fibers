@@ -6,7 +6,9 @@ from typing import Any
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
 
 from ...application import ProjectSession
-from ...measurement_records import MeasurementRecord, MeasurementStatus
+from ...measurement_records import MeasurementKind, MeasurementRecord, MeasurementStatus
+
+_DIAMETER_KINDS = {MeasurementKind.PROJECTED_WIDTH, MeasurementKind.DIAMETER_DISTRIBUTION}
 
 
 def _format_value(record: MeasurementRecord) -> str:
@@ -14,7 +16,7 @@ def _format_value(record: MeasurementRecord) -> str:
     if value is None:
         return "—"
     if record.primary_unit == "m":
-        if abs(value) < 1e-6:
+        if record.kind in _DIAMETER_KINDS or abs(value) < 1e-6:
             return f"{value * 1e9:.4g}"
         return f"{value * 1e6:.4g}"
     if record.primary_unit == "m²":
@@ -98,6 +100,8 @@ class MeasurementTableModel(QAbstractTableModel):
     def _display_unit(record: MeasurementRecord) -> str:
         if record.primary_unit == "m":
             value = record.primary_value
+            if record.kind in _DIAMETER_KINDS:
+                return "nm"
             return "nm" if value is not None and abs(value) < 1e-6 else "µm"
         if record.primary_unit == "m²":
             return "µm²"

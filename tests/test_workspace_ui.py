@@ -296,8 +296,8 @@ def test_quality_panel_ribbon_rows(qtbot, tmp_path):
 def test_measurements_table_refined_columns(qtbot, tmp_path):
     window, _dataset = make_window(qtbot, tmp_path)
     headers = window.measurements_panel.field_model.HEADERS
-    assert "refined EDT" in headers
-    assert "refined Edge" in headers
+    assert "refined EDT (nm)" in headers
+    assert "refined Edge (nm)" in headers
     assert "residual shift" in headers
     assert "refinement" in headers
 

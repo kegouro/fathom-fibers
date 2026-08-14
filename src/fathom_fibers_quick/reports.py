@@ -115,6 +115,31 @@ def _weighted_density(distribution: DiameterDistribution, edges: np.ndarray) -> 
     return hist / (total * widths) if total > 0 else np.zeros_like(hist)
 
 
+def _plot_density_bars(
+    axis, series: list[tuple[str, DiameterDistribution]], edges: np.ndarray, *, nm: bool = True
+) -> None:
+    """Bar histogram of weighted densities on a shared bin grid.
+
+    ``nm`` rescales the x axis and densities from µm to nm so labels can
+    state (nm) and (1/nm) truthfully.
+    """
+    centers = edges[:-1] + np.diff(edges) / 2.0
+    widths = np.diff(edges)
+    scale = 1000.0 if nm else 1.0
+    for name, distribution in series:
+        color, _style, label = _series_style(name)
+        axis.bar(
+            centers * scale,
+            _weighted_density(distribution, edges) / scale,
+            width=widths * scale,
+            color=color,
+            alpha=0.55,
+            edgecolor="none",
+            align="center",
+            label=label,
+        )
+
+
 def _new_figure():
     from matplotlib.figure import Figure
 
@@ -134,7 +159,6 @@ DATASET_FIGURE_A_TITLE = "Python SIMPoly vs Fathom Local — per-image medians"
 
 
 def _series_style(name: str) -> tuple[str, str, str]:
-
     """Color-blind-safe color, line style and short label per series family."""
     styles = {
         "Python SIMPoly": ("#e69f00", "solid"),
@@ -168,7 +192,9 @@ def _primary_x_max(series: list[tuple[str, DiameterDistribution]]) -> float | No
     for name, distribution in series:
         if name in excluded or distribution.diameter.size == 0:
             continue
-        value = float(weighted_quantile(distribution.diameter, distribution.weight, np.array([0.99]))[0])
+        value = float(
+            weighted_quantile(distribution.diameter, distribution.weight, np.array([0.99]))[0]
+        )
         if np.isfinite(value) and value > 0:
             p99s.append(value)
     if not p99s:
@@ -185,10 +211,15 @@ def _long_tail_ratio(series: list[tuple[str, DiameterDistribution]], name: str) 
     summary = summarize_distribution(distribution)
     if summary.weighted_median is None or summary.weighted_median <= 0:
         return None
-    return float(weighted_quantile(distribution.diameter, distribution.weight, np.array([0.95]))[0]) / summary.weighted_median
+    return (
+        float(weighted_quantile(distribution.diameter, distribution.weight, np.array([0.95]))[0])
+        / summary.weighted_median
+    )
 
 
-def _common_series(series: list[tuple[str, DiameterDistribution]]) -> list[tuple[str, DiameterDistribution]]:
+def _common_series(
+    series: list[tuple[str, DiameterDistribution]],
+) -> list[tuple[str, DiameterDistribution]]:
     return [(name, dist) for name, dist in series if name != "Fathom Local"]
 
 
@@ -203,7 +234,9 @@ def _legend(axis, series: list[tuple[str, DiameterDistribution]]) -> None:
     axis.legend(handles, labels, fontsize="small", ncol=2, loc="upper right", framealpha=0.9)
 
 
-def figure_primary_histogram(series: list[tuple[str, DiameterDistribution]], output_dir: Path, x_max: float | None) -> Path:
+def figure_primary_histogram(
+    series: list[tuple[str, DiameterDistribution]], output_dir: Path, x_max: float | None
+) -> Path:
     figure = _new_figure()
     axis = figure.add_subplot(111)
     distributions = [item[1] for item in series]
@@ -211,17 +244,11 @@ def figure_primary_histogram(series: list[tuple[str, DiameterDistribution]], out
     if not edges.size:
         axis.text(0.5, 0.5, "No common distributions available", ha="center")
     else:
-        centers = edges[:-1] + np.diff(edges) / 2.0
-        for name, distribution in series:
-            color, style, label = _series_style(name)
-            axis.plot(
-                centers, _weighted_density(distribution, edges),
-                label=label, color=color, linestyle=style, linewidth=1.9, drawstyle="steps-mid",
-            )
+        _plot_density_bars(axis, series, edges)
     if x_max is not None and edges.size:
-        axis.set_xlim(0, x_max)
-    axis.set_xlabel("Diameter (µm)")
-    axis.set_ylabel("Weighted density (1/µm)")
+        axis.set_xlim(0, x_max * 1000.0)
+    axis.set_xlabel("Diameter (nm)")
+    axis.set_ylabel("Weighted density (1/nm)")
     axis.set_title("Common diameter histogram — primary range")
     axis.grid(alpha=0.2)
     _legend(axis, series)
@@ -239,15 +266,9 @@ def figure_full_histogram(series: list[tuple[str, DiameterDistribution]], output
     if not edges.size:
         axis.text(0.5, 0.5, "No common distributions available", ha="center")
     else:
-        centers = edges[:-1] + np.diff(edges) / 2.0
-        for name, distribution in series:
-            color, style, label = _series_style(name)
-            axis.plot(
-                centers, _weighted_density(distribution, edges),
-                label=label, color=color, linestyle=style, linewidth=1.9, drawstyle="steps-mid",
-            )
-    axis.set_xlabel("Diameter (µm)")
-    axis.set_ylabel("Weighted density (1/µm)")
+        _plot_density_bars(axis, series, edges)
+    axis.set_xlabel("Diameter (nm)")
+    axis.set_ylabel("Weighted density (1/nm)")
     axis.set_title("Common diameter histogram — full observed range")
     axis.grid(alpha=0.2)
     _legend(axis, series)
@@ -257,7 +278,9 @@ def figure_full_histogram(series: list[tuple[str, DiameterDistribution]], output
     return path
 
 
-def figure_ecdf_primary(series: list[tuple[str, DiameterDistribution]], output_dir: Path, x_max: float | None) -> Path:
+def figure_ecdf_primary(
+    series: list[tuple[str, DiameterDistribution]], output_dir: Path, x_max: float | None
+) -> Path:
     figure = _new_figure()
     axis = figure.add_subplot(111)
     for name, distribution in series:
@@ -267,10 +290,12 @@ def figure_ecdf_primary(series: list[tuple[str, DiameterDistribution]], output_d
         x = distribution.diameter[order]
         y = np.cumsum(distribution.weight[order]) / distribution.weight.sum()
         color, style, label = _series_style(name)
-        axis.step(x, y, where="post", label=label, color=color, linestyle=style, linewidth=1.9)
+        axis.step(
+            x * 1000.0, y, where="post", label=label, color=color, linestyle=style, linewidth=1.9
+        )
     if x_max is not None:
-        axis.set_xlim(0, x_max)
-    axis.set_xlabel("Diameter (µm)")
+        axis.set_xlim(0, x_max * 1000.0)
+    axis.set_xlabel("Diameter (nm)")
     axis.set_ylabel("Cumulative weight")
     axis.set_title("Diameter ECDF — primary range")
     axis.grid(alpha=0.2)
@@ -291,8 +316,10 @@ def figure_ecdf_full(series: list[tuple[str, DiameterDistribution]], output_dir:
         x = distribution.diameter[order]
         y = np.cumsum(distribution.weight[order]) / distribution.weight.sum()
         color, style, label = _series_style(name)
-        axis.step(x, y, where="post", label=label, color=color, linestyle=style, linewidth=1.9)
-    axis.set_xlabel("Diameter (µm)")
+        axis.step(
+            x * 1000.0, y, where="post", label=label, color=color, linestyle=style, linewidth=1.9
+        )
+    axis.set_xlabel("Diameter (nm)")
     axis.set_ylabel("Cumulative weight")
     axis.set_title("Diameter ECDF — full observed range")
     axis.grid(alpha=0.2)
@@ -308,8 +335,16 @@ def figure_field_raw_vs_ribbon(comparison: UnifiedMethodComparison, output_dir: 
     from matplotlib.gridspec import GridSpec
 
     series = series_distributions(comparison)
-    raw = [item for item in series if item[0] in {"Fathom Field (EDT)", "Field Paired Edge", "Field Intensity Profile"}]
-    ribbon = [item for item in series if item[0] in {"Ribbon Refined EDT", "Ribbon Refined Edge", "Ribbon Refined Profile"}]
+    raw = [
+        item
+        for item in series
+        if item[0] in {"Fathom Field (EDT)", "Field Paired Edge", "Field Intensity Profile"}
+    ]
+    ribbon = [
+        item
+        for item in series
+        if item[0] in {"Ribbon Refined EDT", "Ribbon Refined Edge", "Ribbon Refined Profile"}
+    ]
     figure = _new_figure()
     figure.set_size_inches(9.6, 4.2)
     grid = GridSpec(1, 2, wspace=0.3, figure=figure)
@@ -322,15 +357,9 @@ def figure_field_raw_vs_ribbon(comparison: UnifiedMethodComparison, output_dir: 
         if not edges.size:
             axis.text(0.5, 0.5, "No distributions", ha="center")
         else:
-            centers = edges[:-1] + np.diff(edges) / 2.0
-            for name, distribution in panel_series:
-                color, style, label = _series_style(name)
-                axis.plot(
-                    centers, _weighted_density(distribution, edges),
-                    label=label, color=color, linestyle=style, linewidth=2.0, drawstyle="steps-mid",
-                )
-        axis.set_xlabel("Diameter (µm)")
-        axis.set_ylabel("Weighted density (1/µm)")
+            _plot_density_bars(axis, panel_series, edges)
+        axis.set_xlabel("Diameter (nm)")
+        axis.set_ylabel("Weighted density (1/nm)")
         axis.set_title(title, fontsize="small")
         axis.grid(alpha=0.2)
         axis.legend(fontsize="small")
@@ -349,13 +378,18 @@ def _weighted_box_bxp(axis, series: list[tuple[str, DiameterDistribution]], titl
     for name, distribution in series:
         if distribution.diameter.size == 0:
             continue
-        q = weighted_quantile(distribution.diameter, distribution.weight, np.array([0.05, 0.25, 0.5, 0.75, 0.95]))
+        q = weighted_quantile(
+            distribution.diameter, distribution.weight, np.array([0.05, 0.25, 0.5, 0.75, 0.95])
+        )
         if not np.isfinite(q).all():
             continue
         boxes.append(
             {
-                "med": float(q[2]), "q1": float(q[1]), "q3": float(q[3]),
-                "whislo": float(q[0]), "whishi": float(q[4]),
+                "med": float(q[2]) * 1000.0,
+                "q1": float(q[1]) * 1000.0,
+                "q3": float(q[3]) * 1000.0,
+                "whislo": float(q[0]) * 1000.0,
+                "whishi": float(q[4]) * 1000.0,
             }
         )
         labels.append(short_name(name))
@@ -364,25 +398,37 @@ def _weighted_box_bxp(axis, series: list[tuple[str, DiameterDistribution]], titl
         return
     axis.bxp(boxes, showfliers=False)
     axis.set_xticklabels(labels, rotation=20, fontsize="small")
-    axis.set_ylabel("Diameter (µm)")
+    axis.set_ylabel("Diameter (nm)")
     axis.set_title(title, fontsize="small")
     axis.grid(alpha=0.2, axis="y")
 
 
-def figure_method_summary_primary(series: list[tuple[str, DiameterDistribution]], output_dir: Path) -> Path:
+def figure_method_summary_primary(
+    series: list[tuple[str, DiameterDistribution]], output_dir: Path
+) -> Path:
     figure = _new_figure()
     axis = figure.add_subplot(111)
-    _weighted_box_bxp(axis, _common_series(series), "Method summary — primary methods (weighted P05/P25/P50/P75/P95)")
+    _weighted_box_bxp(
+        axis,
+        _common_series(series),
+        "Method summary — primary methods (weighted P05/P25/P50/P75/P95)",
+    )
     figure.tight_layout()
     path = output_dir / "figure-method-summary-primary.png"
     _save(figure, path)
     return path
 
 
-def figure_method_summary_full(series: list[tuple[str, DiameterDistribution]], output_dir: Path) -> Path:
+def figure_method_summary_full(
+    series: list[tuple[str, DiameterDistribution]], output_dir: Path
+) -> Path:
     figure = _new_figure()
     axis = figure.add_subplot(111)
-    _weighted_box_bxp(axis, series, "Method summary — full range incl. Fathom Local (weighted P05/P25/P50/P75/P95)")
+    _weighted_box_bxp(
+        axis,
+        series,
+        "Method summary — full range incl. Fathom Local (weighted P05/P25/P50/P75/P95)",
+    )
     figure.tight_layout()
     path = output_dir / "figure-method-summary-full.png"
     _save(figure, path)
@@ -394,15 +440,9 @@ def figure_local_tail(series: list[tuple[str, DiameterDistribution]], output_dir
     axis = figure.add_subplot(111)
     distributions = [item[1] for item in series]
     edges = common_histogram_edges(distributions)
-    centers = edges[:-1] + np.diff(edges) / 2.0
-    for name, distribution in series:
-        color, style, label = _series_style(name)
-        axis.plot(
-            centers, _weighted_density(distribution, edges),
-            label=label, color=color, linestyle=style, linewidth=1.9, drawstyle="steps-mid",
-        )
-    axis.set_xlabel("Diameter (µm)")
-    axis.set_ylabel("Weighted density (1/µm)")
+    _plot_density_bars(axis, series, edges)
+    axis.set_xlabel("Diameter (nm)")
+    axis.set_ylabel("Weighted density (1/nm)")
     axis.set_title("Fathom Local — distribution tail in context")
     axis.grid(alpha=0.2)
     _legend(axis, series)
@@ -422,6 +462,17 @@ def _fmt_range(low: float | None, high: float | None) -> str:
     return f"{low:.5g}–{high:.5g}"
 
 
+def _fmt_nm(value_um: float | None, digits: int = 5) -> str:
+    """Format a diameter given in micrometres as nanometres (1 µm = 1000 nm)."""
+    return "—" if value_um is None else f"{value_um * 1000.0:.{digits}g}"
+
+
+def _fmt_range_nm(low_um: float | None, high_um: float | None) -> str:
+    if low_um is None or high_um is None:
+        return "—"
+    return f"{low_um * 1000.0:.5g}–{high_um * 1000.0:.5g}"
+
+
 def summary_row(result: MethodResult) -> tuple[tuple[str, ...], DistributionSummary | None]:
     distribution = result.common_distribution
     if result.method_id == MethodId.MANUAL_5X5_REFERENCE:
@@ -429,20 +480,15 @@ def summary_row(result: MethodResult) -> tuple[tuple[str, ...], DistributionSumm
     if distribution is None:
         return (result.method_id.value, result.status.value, "—", "—", "—", "—", "—", "—"), None
     summary = summarize_distribution(distribution)
-    iqr = (
-        f"{summary.p25:.5g}–{summary.p75:.5g}"
-        if summary.p25 is not None and summary.p75 is not None
-        else "—"
-    )
     return (
         result.method_id.value,
         result.status.value,
         str(summary.n),
-        _fmt(summary.weighted_mean),
-        _fmt(summary.weighted_median),
-        iqr,
-        _fmt(summary.p05),
-        _fmt(summary.p95),
+        _fmt_nm(summary.weighted_mean),
+        _fmt_nm(summary.weighted_median),
+        _fmt_range_nm(summary.p25, summary.p75),
+        _fmt_nm(summary.p05),
+        _fmt_nm(summary.p95),
     ), summary
 
 
@@ -464,8 +510,8 @@ def _matlab_section(result: MethodResult | None) -> str:
     b1 = stats_payload.get("gauss_b1", result.native_result)
     return (
         "<tr><td>MATLAB SIMPoly — native Gaussian center b1</td><td>"
-        + _fmt(b1, 6)
-        + " µm</td><td>"
+        + _fmt_nm(b1, 6)
+        + " nm</td><td>"
         + html.escape(str(provenance.get("matlab_version", "R2026a")))
         + "</td></tr>"
         "<tr><td>MATLAB source hash</td><td colspan='2'><code>"
@@ -477,14 +523,19 @@ def _matlab_section(result: MethodResult | None) -> str:
         "<tr><td>Common distribution</td><td colspan='2'>"
         + (
             "Unavailable from current cache."
-            if any(flag in result.quality_flags for flag in ("MATLAB_RAW_DIAMETERS_UNAVAILABLE", "COMMON_LENGTH_WEIGHT_UNAVAILABLE"))
+            if any(
+                flag in result.quality_flags
+                for flag in ("MATLAB_RAW_DIAMETERS_UNAVAILABLE", "COMMON_LENGTH_WEIGHT_UNAVAILABLE")
+            )
             else "Available."
         )
         + "</td></tr>"
     )
 
 
-def _estimate_table_rows(comparison: UnifiedMethodComparison) -> list[tuple[str, str, str, str, str, str, str, str]]:
+def _estimate_table_rows(
+    comparison: UnifiedMethodComparison,
+) -> list[tuple[str, str, str, str, str, str, str, str]]:
     """(method, status, N, coverage, mean, median, IQR, P05-P95) rows."""
     rows: list[tuple[str, str, str, str, str, str, str, str]] = []
     for result in comparison.results:
@@ -517,12 +568,18 @@ def _grouped_method_table(comparison: UnifiedMethodComparison) -> str:
         statistics = field.native_statistics
         coverage_by_key = {
             "FATHOM_FIELD_REFINED_EDT_DIAMETER": statistics.get("smooth_coverage_fraction"),
-            "FATHOM_FIELD_REFINED_EDGE_DIAMETER": statistics.get("refined_edge_acceptance_fraction"),
-            "FATHOM_FIELD_REFINED_PROFILE_DIAMETER": statistics.get("refined_profile_acceptance_fraction"),
+            "FATHOM_FIELD_REFINED_EDGE_DIAMETER": statistics.get(
+                "refined_edge_acceptance_fraction"
+            ),
+            "FATHOM_FIELD_REFINED_PROFILE_DIAMETER": statistics.get(
+                "refined_profile_acceptance_fraction"
+            ),
         }
         for key, label in estimator_names:
             distribution = field.secondary_distributions.get(key)
-            status = "EXPERIMENTAL" if key.startswith("FATHOM_FIELD_REFINED_") else field.status.value
+            status = (
+                "EXPERIMENTAL" if key.startswith("FATHOM_FIELD_REFINED_") else field.status.value
+            )
             coverage = coverage_by_key.get(key)
             if distribution is None:
                 rows.append([label, status, "—", "—", "—", "—", "—", "—"])
@@ -530,42 +587,82 @@ def _grouped_method_table(comparison: UnifiedMethodComparison) -> str:
             summary = summarize_distribution(distribution)
             rows.append(
                 [
-                    label, status, str(summary.n),
+                    label,
+                    status,
+                    str(summary.n),
                     "—" if coverage is None else f"{coverage:.1%}",
-                    _fmt(summary.weighted_mean), _fmt(summary.weighted_median),
-                    _fmt_range(summary.p25, summary.p75),
-                    f"{_fmt(summary.p05)}–{_fmt(summary.p95)}",
+                    _fmt_nm(summary.weighted_mean),
+                    _fmt_nm(summary.weighted_median),
+                    _fmt_range_nm(summary.p25, summary.p75),
+                    f"{_fmt_nm(summary.p05)}–{_fmt_nm(summary.p95)}",
                 ]
             )
         return rows
 
-    headers = ["Method / estimator", "Status", "N", "Coverage", "Mean", "Median", "IQR", "P05–P95"]
+    headers = [
+        "Method / estimator",
+        "Status",
+        "N",
+        "Coverage",
+        "Mean (nm)",
+        "Median (nm)",
+        "IQR (nm)",
+        "P05–P95 (nm)",
+    ]
     groups: list[tuple[str, list[str], list[list[Any]]]] = []
 
     matlab = next((r for r in comparison.results if r.method_id == MethodId.MATLAB_SIMPOLY), None)
     python = next((r for r in comparison.results if r.method_id == MethodId.PYTHON_SIMPOLY), None)
     local = next((r for r in comparison.results if r.method_id == MethodId.FATHOM_LOCAL), None)
-    manual = next((r for r in comparison.results if r.method_id == MethodId.MANUAL_5X5_REFERENCE), None)
+    manual = next(
+        (r for r in comparison.results if r.method_id == MethodId.MANUAL_5X5_REFERENCE), None
+    )
 
     reference_rows: list[list[Any]] = []
     if matlab is not None:
         reference_rows.append(
             [
                 "MATLAB SIMPoly — native Gaussian center b1",
-                matlab.status.value, "—", "—", "—",
-                _fmt(matlab.native_result) + " µm", "—",
+                matlab.status.value,
+                "—",
+                "—",
+                "—",
+                _fmt_nm(matlab.native_result) + " nm",
+                "—",
                 "Common sample distribution unavailable from current cache",
             ]
         )
     if python is not None:
         values, _summary = summary_row(python)
-        reference_rows.append([values[0], values[1], values[2], "—", values[3], values[4], values[5], f"{values[6]}–{values[7]}"])
+        reference_rows.append(
+            [
+                values[0],
+                values[1],
+                values[2],
+                "—",
+                values[3],
+                values[4],
+                values[5],
+                f"{values[6]}–{values[7]}",
+            ]
+        )
     groups.append(("REFERENCE / COMPATIBILITY", headers, reference_rows))
 
     independent_rows: list[list[Any]] = []
     if local is not None:
         values, _summary = summary_row(local)
-        independent_rows.append([values[0], values[1], values[2], "—", values[3], values[4], values[5], f"{values[6]}–{values[7]}"])
+        independent_rows.append(
+            [
+                values[0],
+                values[1],
+                values[2],
+                "—",
+                values[3],
+                values[4],
+                values[5],
+                f"{values[6]}–{values[7]}",
+            ]
+        )
     groups.append(("INDEPENDENT ESTIMATOR", headers, independent_rows))
 
     raw_field_rows = field_rows(
@@ -574,16 +671,22 @@ def _grouped_method_table(comparison: UnifiedMethodComparison) -> str:
             ("FATHOM_FIELD_PROFILE_DIAMETER", "Raw Intensity Profile"),
         ]
     )
-    field = next((r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None)
+    field = next(
+        (r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None
+    )
     if field is not None and field.common_distribution is not None:
         summary = summarize_distribution(field.common_distribution)
         raw_field_rows.insert(
             0,
             [
-                "Raw EDT", field.status.value, str(summary.n), "—",
-                _fmt(summary.weighted_mean), _fmt(summary.weighted_median),
-                _fmt_range(summary.p25, summary.p75),
-                f"{_fmt(summary.p05)}–{_fmt(summary.p95)}",
+                "Raw EDT",
+                field.status.value,
+                str(summary.n),
+                "—",
+                _fmt_nm(summary.weighted_mean),
+                _fmt_nm(summary.weighted_median),
+                _fmt_range_nm(summary.p25, summary.p75),
+                f"{_fmt_nm(summary.p05)}–{_fmt_nm(summary.p95)}",
             ],
         )
     groups.append(("FATHOM FIELD — RAW", headers, raw_field_rows))
@@ -601,7 +704,16 @@ def _grouped_method_table(comparison: UnifiedMethodComparison) -> str:
     if manual is not None:
         values, _summary = summary_row(manual)
         human_rows.append(
-            [values[0], values[1], values[2], "—", values[3], values[4], values[5], f"{values[6]}–{values[7]}"]
+            [
+                values[0],
+                values[1],
+                values[2],
+                "—",
+                values[3],
+                values[4],
+                values[5],
+                f"{values[6]}–{values[7]}",
+            ]
         )
     groups.append(("HUMAN REFERENCE", headers, human_rows))
 
@@ -614,10 +726,14 @@ def _grouped_method_table(comparison: UnifiedMethodComparison) -> str:
                 headers,
                 [
                     [
-                        "Consensus", "COMPLETE", str(summary.n), "—",
-                        _fmt(summary.weighted_mean), _fmt(summary.weighted_median),
-                        _fmt_range(summary.p25, summary.p75),
-                        f"{_fmt(summary.p05)}–{_fmt(summary.p95)}",
+                        "Consensus",
+                        "COMPLETE",
+                        str(summary.n),
+                        "—",
+                        _fmt_nm(summary.weighted_mean),
+                        _fmt_nm(summary.weighted_median),
+                        _fmt_range_nm(summary.p25, summary.p75),
+                        f"{_fmt_nm(summary.p05)}–{_fmt_nm(summary.p95)}",
                     ]
                 ],
             )
@@ -635,7 +751,7 @@ def _scientific_summary_cards(comparison: UnifiedMethodComparison) -> str:
         distribution = series.get(name)
         if distribution is None:
             return "—"
-        return _fmt(float(np.median(distribution.diameter))) + " µm"
+        return _fmt_nm(float(np.median(distribution.diameter))) + " nm"
 
     for name in (
         "Python SIMPoly",
@@ -654,23 +770,39 @@ def _scientific_summary_cards(comparison: UnifiedMethodComparison) -> str:
     )
     if field is not None:
         statistics = field.native_statistics
-        items.append((_fmt(statistics.get("smooth_coverage_fraction"), 4), "Ribbon supported coverage", "fraction of samples with a refined centerline"))
         items.append(
             (
-                _fmt(statistics.get("edge_acceptance_fraction"), 4) + " → " + _fmt(statistics.get("refined_edge_acceptance_fraction"), 4),
-                "Edge acceptance raw → refined", "paired-edge acceptance",
+                _fmt(statistics.get("smooth_coverage_fraction"), 4),
+                "Ribbon supported coverage",
+                "fraction of samples with a refined centerline",
             )
         )
         items.append(
             (
-                _fmt(statistics.get("refine_median_shift_um"), 4) + " → " + _fmt(statistics.get("refined_residual_shift_median_um"), 4) + " µm",
-                "Center shift observed → residual", "median values",
+                _fmt(statistics.get("edge_acceptance_fraction"), 4)
+                + " → "
+                + _fmt(statistics.get("refined_edge_acceptance_fraction"), 4),
+                "Edge acceptance raw → refined",
+                "paired-edge acceptance",
             )
         )
         items.append(
             (
-                _fmt(statistics.get("edge_median_asymmetry"), 4) + " → " + _fmt(statistics.get("refined_asymmetry_median"), 4),
-                "Asymmetry raw → refined", "median values",
+                _fmt(statistics.get("refine_median_shift_um"), 4)
+                + " → "
+                + _fmt(statistics.get("refined_residual_shift_median_um"), 4)
+                + " µm",
+                "Center shift observed → residual",
+                "median values",
+            )
+        )
+        items.append(
+            (
+                _fmt(statistics.get("edge_median_asymmetry"), 4)
+                + " → "
+                + _fmt(statistics.get("refined_asymmetry_median"), 4),
+                "Asymmetry raw → refined",
+                "median values",
             )
         )
     return cards(items)
@@ -701,16 +833,22 @@ def _refinement_effect_table(comparison: UnifiedMethodComparison) -> str:
         rows.append(
             [
                 "EDT",
-                str(summary.n), _fmt(summary.weighted_median),
-                str(rsummary.n) if rsummary else "—", _fmt(rsummary.weighted_median) if rsummary else "—",
-                _fmt(rsummary.weighted_median - summary.weighted_median) if rsummary else "—",
-                _fmt(summary.p05), _fmt(summary.p95),
-                _fmt(rsummary.p05) if rsummary else "—", _fmt(rsummary.p95) if rsummary else "—",
+                str(summary.n),
+                _fmt_nm(summary.weighted_median),
+                str(rsummary.n) if rsummary else "—",
+                _fmt_nm(rsummary.weighted_median) if rsummary else "—",
+                _fmt_nm(rsummary.weighted_median - summary.weighted_median) if rsummary else "—",
+                _fmt_nm(summary.p05),
+                _fmt_nm(summary.p95),
+                _fmt_nm(rsummary.p05) if rsummary else "—",
+                _fmt_nm(rsummary.p95) if rsummary else "—",
             ]
         )
     for key, label in estimators:
         raw = field.secondary_distributions.get(key)
-        ribbon = field.secondary_distributions.get(key.replace("FATHOM_FIELD_", "FATHOM_FIELD_REFINED_"))
+        ribbon = field.secondary_distributions.get(
+            key.replace("FATHOM_FIELD_", "FATHOM_FIELD_REFINED_")
+        )
         rsummary = summarize_distribution(ribbon) if ribbon is not None else None
         if raw is None:
             continue
@@ -718,16 +856,30 @@ def _refinement_effect_table(comparison: UnifiedMethodComparison) -> str:
         rows.append(
             [
                 label,
-                str(summary.n), _fmt(summary.weighted_median),
-                str(rsummary.n) if rsummary else "—", _fmt(rsummary.weighted_median) if rsummary else "—",
-                _fmt(rsummary.weighted_median - summary.weighted_median) if rsummary else "—",
-                _fmt(summary.p05), _fmt(summary.p95),
-                _fmt(rsummary.p05) if rsummary else "—", _fmt(rsummary.p95) if rsummary else "—",
+                str(summary.n),
+                _fmt_nm(summary.weighted_median),
+                str(rsummary.n) if rsummary else "—",
+                _fmt_nm(rsummary.weighted_median) if rsummary else "—",
+                _fmt_nm(rsummary.weighted_median - summary.weighted_median) if rsummary else "—",
+                _fmt_nm(summary.p05),
+                _fmt_nm(summary.p95),
+                _fmt_nm(rsummary.p05) if rsummary else "—",
+                _fmt_nm(rsummary.p95) if rsummary else "—",
             ]
         )
     return table(
-        ["Estimator", "Raw N", "Raw median", "Ribbon N", "Ribbon median",
-         "Median change", "Raw P05", "Raw P95", "Ribbon P05", "Ribbon P95"],
+        [
+            "Estimator",
+            "Raw N",
+            "Raw median (nm)",
+            "Ribbon N",
+            "Ribbon median (nm)",
+            "Median change (nm)",
+            "Raw P05 (nm)",
+            "Raw P95 (nm)",
+            "Ribbon P05 (nm)",
+            "Ribbon P95 (nm)",
+        ],
         rows,
     )
 
@@ -737,8 +889,8 @@ def _agreement_section(comparison: UnifiedMethodComparison) -> str:
 
     definitions = (
         "<p>Wasserstein-1 reports the typical transport distance between two diameter "
-        "distributions, in µm. KS is the maximum separation between their cumulative "
-        "distributions. Median difference is the signed difference A − B in µm. "
+        "distributions, in nm. KS is the maximum separation between their cumulative "
+        "distributions. Median difference is the signed difference A − B in nm. "
         "These quantify difference/agreement, not accuracy.</p>"
     )
     agreement_map = {
@@ -756,13 +908,22 @@ def _agreement_section(comparison: UnifiedMethodComparison) -> str:
             rows.append(
                 [
                     display_name(left) + " vs " + display_name(right),
-                    _fmt(item.wasserstein_1), _fmt(item.ks_statistic), _fmt(item.median_difference),
+                    _fmt_nm(item.wasserstein_1),
+                    _fmt(item.ks_statistic),
+                    _fmt_nm(item.median_difference),
                 ]
             )
         return rows
 
-    primary = pair_rows([(MethodId.PYTHON_SIMPOLY, MethodId.FATHOM_LOCAL), (MethodId.PYTHON_SIMPOLY, MethodId.FATHOM_FIELD_GRAPH_V1)])
-    field = next((r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None)
+    primary = pair_rows(
+        [
+            (MethodId.PYTHON_SIMPOLY, MethodId.FATHOM_LOCAL),
+            (MethodId.PYTHON_SIMPOLY, MethodId.FATHOM_FIELD_GRAPH_V1),
+        ]
+    )
+    field = next(
+        (r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None
+    )
     internal: list[list[Any]] = []
     refinement: list[list[Any]] = []
     if field is not None:
@@ -775,7 +936,9 @@ def _agreement_section(comparison: UnifiedMethodComparison) -> str:
                 internal.append(
                     [
                         f"Field {label}",
-                        _fmt(_w1_pair(field.common_distribution.diameter, distribution.diameter)),
+                        _fmt_nm(
+                            _w1_pair(field.common_distribution.diameter, distribution.diameter)
+                        ),
                         _fmt(_ks_pair(field.common_distribution.diameter, distribution.diameter)),
                         "—",
                     ]
@@ -786,7 +949,7 @@ def _agreement_section(comparison: UnifiedMethodComparison) -> str:
             refinement.append(
                 [
                     "Raw Edge vs Ribbon Edge",
-                    _fmt(_w1_pair(raw_edge.diameter, ribbon_edge.diameter)),
+                    _fmt_nm(_w1_pair(raw_edge.diameter, ribbon_edge.diameter)),
                     _fmt(_ks_pair(raw_edge.diameter, ribbon_edge.diameter)),
                     "—",
                 ]
@@ -797,7 +960,7 @@ def _agreement_section(comparison: UnifiedMethodComparison) -> str:
             refinement.append(
                 [
                     "Raw EDT vs Ribbon EDT",
-                    _fmt(_w1_pair(raw_edt.diameter, ribbon_edt.diameter)),
+                    _fmt_nm(_w1_pair(raw_edt.diameter, ribbon_edt.diameter)),
                     _fmt(_ks_pair(raw_edt.diameter, ribbon_edt.diameter)),
                     "—",
                 ]
@@ -808,22 +971,39 @@ def _agreement_section(comparison: UnifiedMethodComparison) -> str:
             refinement.append(
                 [
                     "Raw Profile vs Ribbon Profile",
-                    _fmt(_w1_pair(raw_profile.diameter, ribbon_profile.diameter)),
+                    _fmt_nm(_w1_pair(raw_profile.diameter, ribbon_profile.diameter)),
                     _fmt(_ks_pair(raw_profile.diameter, ribbon_profile.diameter)),
                     "—",
                 ]
             )
-    headers = ["Comparison", "W1 (µm)", "KS", "Median Δ (µm)"]
+    headers = ["Comparison", "W1 (nm)", "KS", "Median Δ (nm)"]
     body = definitions
-    body += "<h3>Primary cross-method comparisons</h3>" + (table(headers, primary) if primary else "<p>No comparable pairs.</p>")
-    body += "<h3>Field internal comparisons</h3>" + (table(headers, internal) if internal else "<p>No comparable pairs.</p>")
-    body += "<h3>Refinement effect</h3>" + (table(headers, refinement) if refinement else "<p>No comparable pairs.</p>")
+    body += "<h3>Primary cross-method comparisons</h3>" + (
+        table(headers, primary) if primary else "<p>No comparable pairs.</p>"
+    )
+    body += "<h3>Field internal comparisons</h3>" + (
+        table(headers, internal) if internal else "<p>No comparable pairs.</p>"
+    )
+    body += "<h3>Refinement effect</h3>" + (
+        table(headers, refinement) if refinement else "<p>No comparable pairs.</p>"
+    )
     all_rows = [
-        [display_name(item.left_method), display_name(item.right_method), _fmt(item.wasserstein_1), _fmt(item.ks_statistic), _fmt(item.median_difference)]
+        [
+            display_name(item.left_method),
+            display_name(item.right_method),
+            _fmt_nm(item.wasserstein_1),
+            _fmt(item.ks_statistic),
+            _fmt_nm(item.median_difference),
+        ]
         for item in comparison.agreements
         if item.wasserstein_1 is not None
     ]
-    body += details("Full pairwise comparison table (appendix)", table(["A", "B", "W1 (µm)", "KS", "Median Δ (µm)"], all_rows) if all_rows else "<p>No comparable pairs.</p>")
+    body += details(
+        "Full pairwise comparison table (appendix)",
+        table(["A", "B", "W1 (nm)", "KS", "Median Δ (nm)"], all_rows)
+        if all_rows
+        else "<p>No comparable pairs.</p>",
+    )
     return body
 
 
@@ -873,7 +1053,8 @@ def build_image_report(
     local_ratio = _long_tail_ratio(series, "Fathom Local")
     common_ratio = _long_tail_ratio(series, "Python SIMPoly")
     tail_triggered = bool(
-        local_ratio is not None and (common_ratio is None or local_ratio > max(2.5, 2.0 * (common_ratio or 1.0)))
+        local_ratio is not None
+        and (common_ratio is None or local_ratio > max(2.5, 2.0 * (common_ratio or 1.0)))
     )
     if tail_triggered:
         figure_local_tail(series, output)
@@ -884,7 +1065,9 @@ def build_image_report(
         (r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None
     )
     matlab = next((r for r in comparison.results if r.method_id == MethodId.MATLAB_SIMPOLY), None)
-    manual = next((r for r in comparison.results if r.method_id == MethodId.MANUAL_5X5_REFERENCE), None)
+    manual = next(
+        (r for r in comparison.results if r.method_id == MethodId.MANUAL_5X5_REFERENCE), None
+    )
 
     if manual_complete is None and manual is not None:
         manual_complete = manual.status == MethodStatus.COMPLETE and (
@@ -893,8 +1076,16 @@ def build_image_report(
         manual_count = int(manual.native_statistics.get("measurement_count", 0))
 
     chips = [
-        ("Calibration", f"{calibration.pixel_size_x_m * 1e9:.5g} × {calibration.pixel_size_y_m * 1e9:.5g} nm/px ({calibration.source})"),
-        ("ROI", str(next((result.valid_roi for result in comparison.results if result.valid_roi), None))),
+        (
+            "Calibration",
+            f"{calibration.pixel_size_x_m * 1e9:.5g} × {calibration.pixel_size_y_m * 1e9:.5g} nm/px ({calibration.source})",
+        ),
+        (
+            "ROI",
+            str(
+                next((result.valid_roi for result in comparison.results if result.valid_roi), None)
+            ),
+        ),
     ]
     if metadata.get("ap_mag") is not None:
         chips.append(("Magnification", str(metadata["ap_mag"])))
@@ -903,7 +1094,14 @@ def build_image_report(
     chips.append(("Generated", datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")))
     badges = [("AUTOMATIC ANALYSIS COMPLETE", "ok")]
     if manual is not None and manual.status != MethodStatus.NOT_MEASURED:
-        badges.append(("MANUAL REFERENCE INCOMPLETE" if not manual_complete else "MANUAL REFERENCE COMPLETE", "warn" if not manual_complete else "ok"))
+        badges.append(
+            (
+                "MANUAL REFERENCE INCOMPLETE"
+                if not manual_complete
+                else "MANUAL REFERENCE COMPLETE",
+                "warn" if not manual_complete else "ok",
+            )
+        )
     else:
         badges.append(("MANUAL REFERENCE INCOMPLETE", "warn"))
     badges.append(("RIBBON EXPERIMENTAL", "exp"))
@@ -918,9 +1116,13 @@ def build_image_report(
     summary_cards = _scientific_summary_cards(comparison)
     body = section(
         "Scientific Summary",
-        summary_cards
-        + "<p>Median diameters per method (µm). Coverage and acceptance describe the "
-        "fraction of supported samples; unmeasured quantities show —.</p>",
+        summary_cards + "<p>Median diameters per method (nm). Coverage and acceptance describe the "
+        "fraction of supported samples; unmeasured quantities show —.</p>"
+        + "<p><b>How to read this report.</b> Diameters are length-weighted and "
+        "reported in nanometres (1 µm = 1000 nm). The median summarizes the central "
+        "diameter; the Mean ± 1 SD row in the key results table describes the weighted "
+        "sample spread, not measurement uncertainty. Agreement values quantify "
+        "difference, not accuracy.</p>",
     )
 
     body += section(
@@ -937,10 +1139,26 @@ def build_image_report(
         statistics = field.native_statistics
         refinement_metrics = cards(
             [
-                (str(statistics.get("smooth_segment_count", "—")), "Refined segments", "supported non-branching runs"),
-                (_fmt(statistics.get("refine_median_shift_um"), 4) + " µm", "Median observed center shift", "before refinement"),
-                (_fmt(statistics.get("refined_residual_shift_median_um"), 4) + " µm", "Median residual center shift", "after refinement"),
-                (_fmt(statistics.get("smooth_coverage_fraction"), 4), "Supported centerline coverage", "abstentions are intentional"),
+                (
+                    str(statistics.get("smooth_segment_count", "—")),
+                    "Refined segments",
+                    "supported non-branching runs",
+                ),
+                (
+                    _fmt(statistics.get("refine_median_shift_um"), 4) + " µm",
+                    "Median observed center shift",
+                    "before refinement",
+                ),
+                (
+                    _fmt(statistics.get("refined_residual_shift_median_um"), 4) + " µm",
+                    "Median residual center shift",
+                    "after refinement",
+                ),
+                (
+                    _fmt(statistics.get("smooth_coverage_fraction"), 4),
+                    "Supported centerline coverage",
+                    "abstentions are intentional",
+                ),
             ]
         )
         body += section(
@@ -991,14 +1209,14 @@ def build_image_report(
         if local_distribution is not None:
             local_summary = summarize_distribution(local_distribution)
             local_rows = table(
-                ["N", "Median", "IQR", "P95", "Max"],
+                ["N", "Median (nm)", "IQR (nm)", "P95 (nm)", "Max (nm)"],
                 [
                     [
                         str(local_summary.n),
-                        _fmt(local_summary.weighted_median),
-                        _fmt_range(local_summary.p25, local_summary.p75),
-                        _fmt(local_summary.p95),
-                        _fmt(float(np.nanmax(local_distribution.diameter))),
+                        _fmt_nm(local_summary.weighted_median),
+                        _fmt_range_nm(local_summary.p25, local_summary.p75),
+                        _fmt_nm(local_summary.p95),
+                        _fmt_nm(float(np.nanmax(local_distribution.diameter))),
                     ]
                 ],
             )
@@ -1051,14 +1269,18 @@ def build_image_report(
     if manual is None or manual.status == MethodStatus.NOT_MEASURED:
         body += section(
             "Manual reference",
-            note("Manual 5×5: 0 / 25 measurements — <b>INCOMPLETE REFERENCE</b>. "
-                 "Missing manual values are never filled in."),
+            note(
+                "Manual 5×5: 0 / 25 measurements — <b>INCOMPLETE REFERENCE</b>. "
+                "Missing manual values are never filled in."
+            ),
         )
     elif manual_complete:
         body += section(
             "Manual reference",
-            note("Manual 5×5: 25 / 25 measurements — reference complete. "
-                 "Manual is a sparse human reference, not ground truth."),
+            note(
+                "Manual 5×5: 25 / 25 measurements — reference complete. "
+                "Manual is a sparse human reference, not ground truth."
+            ),
         )
     else:
         body += section(
@@ -1090,12 +1312,26 @@ def _quality_section_v2(comparison: UnifiedMethodComparison) -> str:
     important_rows: list[list[Any]] = []
     for result in comparison.results:
         summary_cards.append(
-            (result.status.value, display_name(result.method_id), f"{len(result.quality_flags)} flags")
+            (
+                result.status.value,
+                display_name(result.method_id),
+                f"{len(result.quality_flags)} flags",
+            )
         )
     if field is not None:
         statistics = field.native_statistics
-        summary_cards.append(("—", "Ribbon supported coverage", _fmt(statistics.get("smooth_coverage_fraction"), 4)))
-        summary_cards.append(("—", "Raw → refined Edge acceptance", _fmt(statistics.get("edge_acceptance_fraction"), 4) + " → " + _fmt(statistics.get("refined_edge_acceptance_fraction"), 4)))
+        summary_cards.append(
+            ("—", "Ribbon supported coverage", _fmt(statistics.get("smooth_coverage_fraction"), 4))
+        )
+        summary_cards.append(
+            (
+                "—",
+                "Raw → refined Edge acceptance",
+                _fmt(statistics.get("edge_acceptance_fraction"), 4)
+                + " → "
+                + _fmt(statistics.get("refined_edge_acceptance_fraction"), 4),
+            )
+        )
 
     important_flags = {
         "POSSIBLE_CROSSING",
@@ -1128,7 +1364,11 @@ def _quality_section_v2(comparison: UnifiedMethodComparison) -> str:
         flag_sections += f"<h3>{display_name(result.method_id)}</h3><table><tr><th>Flag</th><th>Meaning</th></tr>{rows}</table>"
     body = cards(summary_cards)
     body += "<h3>Important diagnostics</h3>"
-    body += table(["Flag", "Count", "Meaning"], important_rows) if important_rows else "<p>No important diagnostics flagged.</p>"
+    body += (
+        table(["Flag", "Count", "Meaning"], important_rows)
+        if important_rows
+        else "<p>No important diagnostics flagged.</p>"
+    )
     body += info(
         "Ribbon coverage below 100% is not automatically a failure: unsupported samples "
         "include intentionally abstained regions (crossings, junctions, gaps, "
@@ -1148,15 +1388,41 @@ def _methods_cards(comparison: UnifiedMethodComparison) -> str:
     from .report_style import cards, section
 
     rows = [
-        ("MATLAB SIMPoly", "Reference/native implementation from a validated cache.", "COMPLETE (cache)"),
-        ("Python SIMPoly", "Python source-compatible approximation; calibrated length-weighted diameters on the skeleton.", "COMPLETE"),
-        ("Fathom Local", "Independent local cross-section estimator; not truth and may show a broader distribution.", "COMPLETE"),
-        ("Fathom Field", "Structure-tensor orientation plus local boundary metrology (EDT / paired edge / intensity profile).", "EXPERIMENTAL"),
-        ("Oriented Ribbon V1", "Experimental refined centerline and re-measurement of the Field estimators.", "EXPERIMENTAL"),
+        (
+            "MATLAB SIMPoly",
+            "Reference/native implementation from a validated cache.",
+            "COMPLETE (cache)",
+        ),
+        (
+            "Python SIMPoly",
+            "Python source-compatible approximation; calibrated length-weighted diameters on the skeleton.",
+            "COMPLETE",
+        ),
+        (
+            "Fathom Local",
+            "Independent local cross-section estimator; not truth and may show a broader distribution.",
+            "COMPLETE",
+        ),
+        (
+            "Fathom Field",
+            "Structure-tensor orientation plus local boundary metrology (EDT / paired edge / intensity profile).",
+            "EXPERIMENTAL",
+        ),
+        (
+            "Oriented Ribbon V1",
+            "Experimental refined centerline and re-measurement of the Field estimators.",
+            "EXPERIMENTAL",
+        ),
         ("Manual 5×5", "Sparse human reference grid; not ground truth.", "REFERENCE"),
-        ("Consensus", "Equal-method quantile pseudo-reference across participating methods; not ground truth.", "REFERENCE"),
+        (
+            "Consensus",
+            "Equal-method quantile pseudo-reference across participating methods; not ground truth.",
+            "REFERENCE",
+        ),
     ]
-    return section("Methods", cards([("", label, purpose + " " + status) for label, purpose, status in rows]))
+    return section(
+        "Methods", cards([("", label, purpose + " " + status) for label, purpose, status in rows])
+    )
 
 
 def _matlab_card_v2(matlab: MethodResult | None) -> str:
@@ -1173,8 +1439,12 @@ def _matlab_card_v2(matlab: MethodResult | None) -> str:
         "MATLAB SIMPoly",
         cards(
             [
-                (f"{_fmt(b1, 6)} µm", "Native Gaussian center b1", f"reference {version}"),
-                ("unavailable", "Common local distribution", "no raw diameter array in the current cache"),
+                (f"{_fmt_nm(b1, 6)} nm", "Native Gaussian center b1", f"reference {version}"),
+                (
+                    "unavailable",
+                    "Common local distribution",
+                    "no raw diameter array in the current cache",
+                ),
             ]
         )
         + info(
@@ -1185,7 +1455,9 @@ def _matlab_card_v2(matlab: MethodResult | None) -> str:
     )
 
 
-def _provenance_v2(comparison: UnifiedMethodComparison, image: Any, matlab: MethodResult | None) -> str:
+def _provenance_v2(
+    comparison: UnifiedMethodComparison, image: Any, matlab: MethodResult | None
+) -> str:
     from ._build_info import source_commit
     from .report_style import details, table
 
@@ -1193,11 +1465,19 @@ def _provenance_v2(comparison: UnifiedMethodComparison, image: Any, matlab: Meth
         ["Image", comparison.image_id],
         ["Application", "Fathom Fibers"],
         ["Commit", source_commit()[:12]],
-        ["Calibration", f"{image.calibration.pixel_size_x_m * 1e9:.5g} × {image.calibration.pixel_size_y_m * 1e9:.5g} nm/px ({image.calibration.source})"],
+        [
+            "Calibration",
+            f"{image.calibration.pixel_size_x_m * 1e9:.5g} × {image.calibration.pixel_size_y_m * 1e9:.5g} nm/px ({image.calibration.source})",
+        ],
         ["Source", str(image.source_path)],
     ]
     for result in comparison.results:
-        rows.append([f"Method {display_name(result.method_id)}", f"version {result.method_version} · status {result.status.value}"])
+        rows.append(
+            [
+                f"Method {display_name(result.method_id)}",
+                f"version {result.method_version} · status {result.status.value}",
+            ]
+        )
     if matlas := matlab:
         for key in ("source_matlab_sha256", "cache_representation", "matlab_version"):
             if matlas.provenance.get(key):
@@ -1253,16 +1533,15 @@ def build_dataset_report(
         for entry in payload.get("results", ()):
             statuses[entry["method_id"]] = entry["status"]
             if entry["method_id"] == MethodId.MATLAB_SIMPOLY.value:
-                medians[entry["method_id"]] = _fmt(entry.get("native_result"))
+                medians[entry["method_id"]] = _fmt_nm(entry.get("native_result"))
             elif entry.get("common_distribution"):
-                medians[entry["method_id"]] = _fmt(entry["common_distribution"].get("median"))
+                medians[entry["method_id"]] = _fmt_nm(entry["common_distribution"].get("median"))
             elif entry.get("secondary_distributions"):
-                medians[entry["method_id"]] = _fmt(
+                medians[entry["method_id"]] = _fmt_nm(
                     next(iter(entry["secondary_distributions"].values())).get("median")
                 )
         cells = "".join(
-            f"<td>{html.escape(statuses.get(method, 'NOT_RUN'))}</td>"
-            for method in method_order
+            f"<td>{html.escape(statuses.get(method, 'NOT_RUN'))}</td>" for method in method_order
         )
         median_cells = "".join(
             f"<td>{html.escape(medians.get(method, '—'))}</td>" for method in method_order
@@ -1273,24 +1552,30 @@ def build_dataset_report(
             f"<li><a href='images/{stem}/index.html'>{html.escape(image_id)}</a>"
             f" — {html.escape(', '.join(statuses.values()) or '—')}</li>"
         )
-        status_matrix_rows += (
-            f"<tr><td>{html.escape(image_id)}</td>{cells}</tr>"
-        )
+        status_matrix_rows += f"<tr><td>{html.escape(image_id)}</td>{cells}</tr>"
         per_image_rows += f"<tr><td>{html.escape(image_id)}</td>{median_cells}</tr>"
 
     _dataset_figures(payloads, output)
 
     method_completion_rows = ""
     for method in method_order:
-        counts = {status: 0 for status in ("COMPLETE", "NOT_RUN", "EXPERIMENTAL_FIELD_MEASURING", "FAILED", "NOT_MEASURED", "UNAVAILABLE")}
+        counts = {
+            status: 0
+            for status in (
+                "COMPLETE",
+                "NOT_RUN",
+                "EXPERIMENTAL_FIELD_MEASURING",
+                "FAILED",
+                "NOT_MEASURED",
+                "UNAVAILABLE",
+            )
+        }
         for payload in payloads:
             for entry in payload.get("results", ()):
                 if entry["method_id"] == method:
                     counts[entry["status"]] = counts.get(entry["status"], 0) + 1
         status_text = ", ".join(f"{key} {value}" for key, value in sorted(counts.items()) if value)
-        method_completion_rows += (
-            f"<tr><td>{html.escape(display_name(method))}</td><td>{html.escape(status_text)}</td></tr>"
-        )
+        method_completion_rows += f"<tr><td>{html.escape(display_name(method))}</td><td>{html.escape(status_text)}</td></tr>"
 
     manual_progress = "Manual 5×5 store not loaded."
     if manual_store is not None:
@@ -1317,9 +1602,9 @@ def build_dataset_report(
 <table><tr><th>Method</th><th>Status counts</th></tr>{method_completion_rows}</table>
 <h2>Manual progress</h2><p>{html.escape(manual_progress)}</p>
 <h2>16-image processing matrix</h2>
-<table><tr><th>Image</th>{''.join(f"<th>{html.escape(display_name(m))}</th>" for m in method_order)}</tr>{status_matrix_rows}</table>
-<h2>Diameter summary by image (µm)</h2>
-<table><tr><th>Image</th>{''.join(f"<th>{html.escape(display_name(m))}</th>" for m in method_order)}</tr>{per_image_rows}</table>
+<table><tr><th>Image</th>{"".join(f"<th>{html.escape(display_name(m))}</th>" for m in method_order)}</tr>{status_matrix_rows}</table>
+<h2>Diameter summary by image (nm)</h2>
+<table><tr><th>Image</th>{"".join(f"<th>{html.escape(display_name(m))}</th>" for m in method_order)}</tr>{per_image_rows}</table>
 <h2>Per-image reports</h2><ul>{per_image_links}</ul>
 <h2>Dataset figures</h2>
 <p>Per-image weighted medians (image-level summaries; images are statistical units, not pooled samples).</p>
@@ -1327,9 +1612,9 @@ def build_dataset_report(
 <img src="dataset-median-ecdf.png" alt="Distribution of per-image medians"><br>
 <img src="dataset-wasserstein-matrix.png" alt="Pairwise Wasserstein-1 matrix">
 <h2>Pairwise distribution distance</h2>
-<table><tr><th>Left</th><th>Right</th><th>Median Wasserstein-1 (µm)</th><th>Images</th></tr>{wasserstein_rows}</table>
+<table><tr><th>Left</th><th>Right</th><th>Median Wasserstein-1 (nm)</th><th>Images</th></tr>{wasserstein_rows}</table>
 <h2>Pairwise median-method difference</h2>
-<table><tr><th>Left</th><th>Right</th><th>Median difference (µm)</th><th>Images</th></tr>{difference_rows}</table>
+<table><tr><th>Left</th><th>Right</th><th>Median difference (nm)</th><th>Images</th></tr>{difference_rows}</table>
 <h2>Provenance</h2>
 <p>Generated {datetime.now(UTC).isoformat()} from cached MethodResult payloads; no algorithm was rerun for this report and MATLAB was never launched.</p>
 </body></html>""",
@@ -1348,35 +1633,39 @@ def _render_summary_image_page(payload: dict[str, Any], output: Path) -> Path:
         secondary = entry.get("secondary_distributions") or {}
         native = entry.get("native_result")
         if method == MethodId.MATLAB_SIMPOLY.value:
-            value = f"b1 {_fmt(native, 6)} µm"
+            value = f"b1 {_fmt_nm(native, 6)} nm"
         elif distribution and distribution.get("median") is not None:
             value = (
-                f"median {_fmt(distribution['median'], 5)} µm · N={distribution.get('n', '—')}"
+                f"median {_fmt_nm(distribution['median'], 5)} nm · N={distribution.get('n', '—')}"
             )
         elif secondary:
             first = next(iter(secondary.values()))
-            value = f"median {_fmt(first.get('median'), 5)} µm" if first.get("median") else "—"
+            value = f"median {_fmt_nm(first.get('median'), 5)} nm" if first.get("median") else "—"
         else:
             value = "—"
         rows += (
-            "<tr><td>" + html.escape(display_name(method))
-            + "</td><td>" + html.escape(entry.get("status", "NOT_RUN"))
-            + "</td><td>" + html.escape(str(value))
-            + "</td><td>" + html.escape(", ".join(entry.get("quality_flags", ())) or "—")
+            "<tr><td>"
+            + html.escape(display_name(method))
+            + "</td><td>"
+            + html.escape(entry.get("status", "NOT_RUN"))
+            + "</td><td>"
+            + html.escape(str(value))
+            + "</td><td>"
+            + html.escape(", ".join(entry.get("quality_flags", ())) or "—")
             + "</td></tr>"
         )
     consensus = payload.get("consensus", {})
     index = output / "index.html"
     index.write_text(
         f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>{html.escape(str(payload.get('image_id', 'image')))}</title>
+<html lang="en"><head><meta charset="utf-8"><title>{html.escape(str(payload.get("image_id", "image")))}</title>
 <style>body{{font:14px system-ui,sans-serif;margin:2rem;color:#20242a}}table{{border-collapse:collapse;width:100%;margin:1rem 0}}th,td{{border:1px solid #ccd2d8;padding:.4rem;text-align:left}}th{{background:#eef1f4}}.note{{border-left:4px solid #b7791f;background:#fff9e6;padding:.7rem}}</style></head><body>
-<h1>{html.escape(str(payload.get('image_id', 'image')))}</h1>
+<h1>{html.escape(str(payload.get("image_id", "image")))}</h1>
 <p class="note">Summary-cache page. Run the methods for this image in the workspace to obtain full samples, overlays and distribution figures.</p>
 <table><tr><th>Method</th><th>Status</th><th>Summary value</th><th>Flags</th></tr>{rows}</table>
 <h2>Consensus pseudo-reference</h2>
-<p>Participants: {html.escape(', '.join(consensus.get('participating_methods', ())) or '—')}.
-Excluded: {html.escape(', '.join(f"{k}: {v}" for k, v in consensus.get('excluded_methods', {}).items()) or '—')}.</p>
+<p>Participants: {html.escape(", ".join(consensus.get("participating_methods", ())) or "—")}.
+Excluded: {html.escape(", ".join(f"{k}: {v}" for k, v in consensus.get("excluded_methods", {}).items()) or "—")}.</p>
 </body></html>""",
         encoding="utf-8",
     )
@@ -1408,15 +1697,24 @@ def _dataset_figures(payloads: list[dict[str, Any]], output: Path) -> list[Path]
     width = 0.26
     for offset, method in enumerate(method_ids):
         values = medians[method]
-        axis.bar(x + (offset - 1) * width, values, width, label=labels[offset], color=SERIES_COLORS.get(labels[offset]))
+        axis.bar(
+            x + (offset - 1) * width,
+            values,
+            width,
+            label=labels[offset],
+            color=SERIES_COLORS.get(labels[offset]),
+        )
     axis.set_xticks(x)
     axis.set_xticklabels(
-        [html.escape(Path(p.get("image_id", "?")).stem.replace("PVDF Jose_", "J")) for p in payloads],
+        [
+            html.escape(Path(p.get("image_id", "?")).stem.replace("PVDF Jose_", "J"))
+            for p in payloads
+        ],
         rotation=45,
         ha="right",
         fontsize="small",
     )
-    axis.set_ylabel("Weighted median diameter (µm)")
+    axis.set_ylabel("Weighted median diameter (nm)")
     axis.set_title("Per-image median comparison")
     axis.legend(fontsize="small")
     axis.grid(alpha=0.2, axis="y")
@@ -1431,8 +1729,13 @@ def _dataset_figures(payloads: list[dict[str, Any]], output: Path) -> list[Path]
         values = np.asarray(medians[method], float)
         if values.size:
             order = np.argsort(values)
-            axis.step(values[order], np.arange(1, values.size + 1) / values.size, where="post", label=labels[method_ids.index(method)])
-    axis.set_xlabel("Weighted median diameter (µm)")
+            axis.step(
+                values[order] * 1000.0,
+                np.arange(1, values.size + 1) / values.size,
+                where="post",
+                label=labels[method_ids.index(method)],
+            )
+    axis.set_xlabel("Weighted median diameter (nm)")
     axis.set_ylabel("Fraction of images")
     axis.set_title("Distribution of per-image medians")
     axis.legend(fontsize="small")
@@ -1456,8 +1759,13 @@ def _dataset_figures(payloads: list[dict[str, Any]], output: Path) -> list[Path]
         x = np.arange(len(matrix_keys))
         axis.bar(x, [np.median(matrix[key]) for key in matrix_keys])
         axis.set_xticks(x)
-        axis.set_xticklabels([f"{display_name(a)} ↔ {display_name(b)}" for a, b in matrix_keys], rotation=40, ha="right", fontsize="small")
-    axis.set_ylabel("Median Wasserstein-1 (µm)")
+        axis.set_xticklabels(
+            [f"{display_name(a)} ↔ {display_name(b)}" for a, b in matrix_keys],
+            rotation=40,
+            ha="right",
+            fontsize="small",
+        )
+    axis.set_ylabel("Median Wasserstein-1 (nm)")
     axis.set_title("Pairwise distribution distance matrix")
     axis.grid(alpha=0.2, axis="y")
     figure.tight_layout()
@@ -1477,16 +1785,22 @@ def _dataset_agreement_rows(payloads: list[dict[str, Any]]) -> tuple[str, str]:
                 wasserstein.setdefault(key, []).append(float(agreement["wasserstein_1"]))
             if agreement.get("median_difference") is not None:
                 differences.setdefault(key, []).append(float(agreement["median_difference"]))
-    wasserstein_rows = "".join(
-        f"<tr><td>{html.escape(display_name(left))}</td><td>{html.escape(display_name(right))}</td>"
-        f"<td>{np.median(values):.6g}</td><td>{len(values)}</td></tr>"
-        for (left, right), values in sorted(wasserstein.items())
-    ) or "<tr><td colspan='4'>No comparable pairwise distributions.</td></tr>"
-    difference_rows = "".join(
-        f"<tr><td>{html.escape(display_name(left))}</td><td>{html.escape(display_name(right))}</td>"
-        f"<td>{np.median(values):.6g}</td><td>{len(values)}</td></tr>"
-        for (left, right), values in sorted(differences.items())
-    ) or "<tr><td colspan='4'>No comparable pairwise distributions.</td></tr>"
+    wasserstein_rows = (
+        "".join(
+            f"<tr><td>{html.escape(display_name(left))}</td><td>{html.escape(display_name(right))}</td>"
+            f"<td>{np.median(values) * 1000.0:.6g}</td><td>{len(values)}</td></tr>"
+            for (left, right), values in sorted(wasserstein.items())
+        )
+        or "<tr><td colspan='4'>No comparable pairwise distributions.</td></tr>"
+    )
+    difference_rows = (
+        "".join(
+            f"<tr><td>{html.escape(display_name(left))}</td><td>{html.escape(display_name(right))}</td>"
+            f"<td>{np.median(values) * 1000.0:.6g}</td><td>{len(values)}</td></tr>"
+            for (left, right), values in sorted(differences.items())
+        )
+        or "<tr><td colspan='4'>No comparable pairwise distributions.</td></tr>"
+    )
     return wasserstein_rows, difference_rows
 
 
@@ -1494,14 +1808,20 @@ def _factual_observations(payloads: list[dict[str, Any]]) -> str:
     processed = sum(
         1
         for payload in payloads
-        if any(entry.get("status") not in {"NOT_RUN", "FAILED"} for entry in payload.get("results", ()))
+        if any(
+            entry.get("status") not in {"NOT_RUN", "FAILED"} for entry in payload.get("results", ())
+        )
     )
     edge_acceptances: list[float] = []
     profile_acceptances: list[float] = []
     edge_minus_edt: list[float] = []
     for payload in payloads:
         field = next(
-            (entry for entry in payload.get("results", ()) if entry["method_id"] == MethodId.FATHOM_FIELD_GRAPH_V1.value),
+            (
+                entry
+                for entry in payload.get("results", ())
+                if entry["method_id"] == MethodId.FATHOM_FIELD_GRAPH_V1.value
+            ),
             None,
         )
         if not field:
@@ -1599,10 +1919,7 @@ def _dataset_ribbon_metrics(comparisons: list[Any]) -> dict[str, Any]:
     w1_refined: list[float] = []
     improved = 0
     for comparison in comparisons:
-        field = next(
-            r for r in comparison.results
-            if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1
-        )
+        field = next(r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1)
         ls = field.local_samples
         edge_raw = np.asarray(ls["edge_accepted"], bool)
         edge_refined = np.asarray(ls["refined_edge_accepted"], bool)
@@ -1631,7 +1948,17 @@ def _final_figures(output: Path, comparisons: list[Any], metrics: dict[str, Any]
 
     stems = [Path(c.image_id).stem.replace("PVDF Jose_", "J") for c in comparisons]
     x = np.arange(len(comparisons))
-    medians = {key: [] for key in ("edt_raw", "edt_refined", "edge_raw", "edge_refined", "profile_raw", "profile_refined")}
+    medians = {
+        key: []
+        for key in (
+            "edt_raw",
+            "edt_refined",
+            "edge_raw",
+            "edge_refined",
+            "profile_raw",
+            "profile_refined",
+        )
+    }
 
     shifts = {"observed": [], "residual": []}
     asymmetry = {"raw": [], "refined": []}
@@ -1657,12 +1984,21 @@ def _final_figures(output: Path, comparisons: list[Any], metrics: dict[str, Any]
         for comparison in comparisons:
             result = next((r for r in comparison.results if r.method_id == method_id), None)
             distribution = result.common_distribution if result is not None else None
-            values.append(float(np.median(distribution.diameter)) if distribution is not None else None)
+            values.append(
+                float(np.median(distribution.diameter)) if distribution is not None else None
+            )
         label = "Python SIMPoly" if method_id == MethodId.PYTHON_SIMPOLY else "Fathom Local"
-        axis.plot(x, values, marker, color=color, label=label, ms=5)
+        axis.plot(
+            x,
+            [value * 1000.0 if value is not None else None for value in values],
+            marker,
+            color=color,
+            label=label,
+            ms=5,
+        )
     axis.set_xticks(x)
     axis.set_xticklabels(stems, rotation=45, ha="right", fontsize="small")
-    axis.set_ylabel("Median diameter (µm)")
+    axis.set_ylabel("Median diameter (nm)")
     axis.set_title(DATASET_FIGURE_A_TITLE)
     axis.legend(fontsize="small")
     axis.grid(alpha=0.2, axis="y")
@@ -1671,11 +2007,25 @@ def _final_figures(output: Path, comparisons: list[Any], metrics: dict[str, Any]
 
     figure = Figure(figsize=(10, 4))
     axis = figure.add_subplot(111)
-    axis.plot(x, medians["edt_raw"], "o--", color="#9aa7c9", label="Raw EDT", ms=5)
-    axis.plot(x, medians["edt_refined"], "o-", color="#4d648d", label="Ribbon EDT", ms=5)
+    axis.plot(
+        x,
+        [value * 1000.0 for value in medians["edt_raw"]],
+        "o--",
+        color="#9aa7c9",
+        label="Raw EDT",
+        ms=5,
+    )
+    axis.plot(
+        x,
+        [value * 1000.0 for value in medians["edt_refined"]],
+        "o-",
+        color="#4d648d",
+        label="Ribbon EDT",
+        ms=5,
+    )
     axis.set_xticks(x)
     axis.set_xticklabels(stems, rotation=45, ha="right", fontsize="small")
-    axis.set_ylabel("Median diameter (µm)")
+    axis.set_ylabel("Median diameter (nm)")
     axis.set_title("Raw EDT vs Ribbon EDT by image")
     axis.legend(fontsize="small")
     axis.grid(alpha=0.2, axis="y")
@@ -1684,11 +2034,25 @@ def _final_figures(output: Path, comparisons: list[Any], metrics: dict[str, Any]
 
     figure = Figure(figsize=(10, 4))
     axis = figure.add_subplot(111)
-    axis.plot(x, metrics["w1_edt_edge_raw"], "o--", color="#9aa7c9", label="W1 raw EDT↔Edge", ms=5)
-    axis.plot(x, metrics["w1_edt_edge_refined"], "o-", color="#4d648d", label="W1 Ribbon EDT↔Edge", ms=5)
+    axis.plot(
+        x,
+        [value * 1000.0 for value in metrics["w1_edt_edge_raw"]],
+        "o--",
+        color="#9aa7c9",
+        label="W1 raw EDT↔Edge",
+        ms=5,
+    )
+    axis.plot(
+        x,
+        [value * 1000.0 for value in metrics["w1_edt_edge_refined"]],
+        "o-",
+        color="#4d648d",
+        label="W1 Ribbon EDT↔Edge",
+        ms=5,
+    )
     axis.set_xticks(x)
     axis.set_xticklabels(stems, rotation=45, ha="right", fontsize="small")
-    axis.set_ylabel("Wasserstein-1 (µm)")
+    axis.set_ylabel("Wasserstein-1 (nm)")
     axis.set_title("Pairwise EDT↔Edge agreement, raw vs Ribbon")
     axis.legend(fontsize="small")
     axis.grid(alpha=0.2, axis="y")
@@ -1789,24 +2153,36 @@ def build_final_dataset_report(
     overview_cards = cards(
         [
             (str(len(dataset.images)), "Images", "dataset images"),
-            (f"{len(comparisons)} / {len(dataset.images)}", "Automatic analysis", "images with cached full results"),
+            (
+                f"{len(comparisons)} / {len(dataset.images)}",
+                "Automatic analysis",
+                "images with cached full results",
+            ),
             (f"{manual_total} / 400", "Manual 5×5", "operator measurements recorded"),
             (_calibration_short(calibration_audit), "Calibration", "per-image pixel size"),
         ]
     )
     body = section(
         "1. Dataset overview",
-        overview_cards + _calibration_audit_summary(calibration_audit) + note(
+        overview_cards
+        + _calibration_audit_summary(calibration_audit)
+        + note(
             "Dataset conclusions aggregate image-level metrics; local samples are not pooled "
             "across images into a single inferential claim."
+        )
+        + note(
+            "<b>How to read this report.</b> Diameters are reported in nanometres (1 µm = 1000 nm). "
+            "The dataset method summary lists per-image medians; the Mean ± 1 SD column is the "
+            "mean ± one standard deviation of the per-image medians (between-image spread). "
+            "The dataset-wide distribution is an equal-image-weight mixture — a descriptive "
+            "overview, not an inferential pooled population model."
         ),
         id_="dataset-overview",
     )
 
     # TOC + per-image navigation
     image_links = "".join(
-        f"<a href='#image-{index + 1:02d}'>{index + 1:02d}</a>"
-        for index in range(len(comparisons))
+        f"<a href='#image-{index + 1:02d}'>{index + 1:02d}</a>" for index in range(len(comparisons))
     )
     toc_sections = (
         ("dataset-overview", "Dataset overview"),
@@ -1821,14 +2197,21 @@ def build_final_dataset_report(
         ("provenance", "Provenance"),
         ("limitations", "Limitations"),
     )
-    toc_items = "".join(f"<li><a href='#{anchor}'>{heading}</a></li>" for anchor, heading in toc_sections)
+    toc_items = "".join(
+        f"<li><a href='#{anchor}'>{heading}</a></li>" for anchor, heading in toc_sections
+    )
     body += f"<section id='dataset-toc'><h2>Contents</h2><div class='toc'><ol>{toc_items}</ol></div></section>"
     body += f"<section id='images-nav'><h3>Per-image navigation</h3><div class='image-nav'>{image_links}</div></section>"
 
-    body += section("2. Dataset method summary", _dataset_method_summary(comparisons), id_="dataset-method-summary")
+    body += section(
+        "2. Dataset method summary",
+        _dataset_method_summary(comparisons),
+        id_="dataset-method-summary",
+    )
     body += _dataset_distribution_section(comparisons, output)
     body += section(
-        "4. Oriented Ribbon dataset behavior", _dataset_ribbon_section(metrics, comparisons),
+        "4. Oriented Ribbon dataset behavior",
+        _dataset_ribbon_section(metrics, comparisons),
         id_="ribbon-dataset-behavior",
     )
     body += section(
@@ -1838,22 +2221,55 @@ def build_final_dataset_report(
             DATASET_FIGURE_A_TITLE,
             "Median diameter per image for the two independent automatic estimators.",
         )
-        + figure_block("dataset-figure-B.png", "Raw EDT vs Ribbon EDT by image", "Refined-centerline effect on EDT medians.")
-        + figure_block("dataset-figure-C.png", "EDT↔Edge agreement", "Pairwise Wasserstein-1 raw vs Ribbon by image.")
-        + figure_block("dataset-figure-D.png", "Center shifts", "Observed vs residual median center shift by image.")
-        + figure_block("dataset-figure-E.png", "Asymmetry", "Median paired-edge asymmetry raw vs refined by image.")
-        + figure_block("dataset-figure-F.png", "Ribbon coverage", "Supported refined-centerline coverage per image."),
+        + figure_block(
+            "dataset-figure-B.png",
+            "Raw EDT vs Ribbon EDT by image",
+            "Refined-centerline effect on EDT medians.",
+        )
+        + figure_block(
+            "dataset-figure-C.png",
+            "EDT↔Edge agreement",
+            "Pairwise Wasserstein-1 raw vs Ribbon by image.",
+        )
+        + figure_block(
+            "dataset-figure-D.png",
+            "Center shifts",
+            "Observed vs residual median center shift by image.",
+        )
+        + figure_block(
+            "dataset-figure-E.png",
+            "Asymmetry",
+            "Median paired-edge asymmetry raw vs refined by image.",
+        )
+        + figure_block(
+            "dataset-figure-F.png",
+            "Ribbon coverage",
+            "Supported refined-centerline coverage per image.",
+        ),
         id_="dataset-figures",
     )
     body += section("6. Quality overview", _dataset_quality(comparisons), id_="quality-overview")
-    body += section("7. Manual 5×5", _final_manual_section(manual_store, dataset), id_="manual-reference")
+    body += section(
+        "7. Manual 5×5", _final_manual_section(manual_store, dataset), id_="manual-reference"
+    )
     body += section("8. Methods", _methods_cards_dataset(), id_="methods")
-    body += section("9. Images", _dataset_image_sections(output, comparisons, dataset, manual_store), id_="images")
-    body += section("10. Provenance", _final_provenance(dataset, repo, cache, calibration_audit), id_="provenance")
+    body += section(
+        "9. Images",
+        _dataset_image_sections(output, comparisons, dataset, manual_store),
+        id_="images",
+    )
+    body += section(
+        "10. Provenance",
+        _final_provenance(dataset, repo, cache, calibration_audit),
+        id_="provenance",
+    )
     body += section("11. Limitations", _dataset_limitations(), id_="limitations")
 
     index = output / "index.html"
-    index.write_text(page("Fathom Fibers — Dataset Scientific Report", head_html=head, body_html=body), encoding="utf-8")
+    index.write_text(
+        page("Fathom Fibers — Dataset Scientific Report", head_html=head, body_html=body),
+        encoding="utf-8",
+    )
     return index
 
 
@@ -1868,7 +2284,11 @@ def _dataset_method_summary(comparisons: list[Any]) -> str:
         ("FATHOM_FIELD_GRAPH_V1", "Raw Profile", "secondary__FATHOM_FIELD_PROFILE_DIAMETER"),
         ("FATHOM_FIELD_GRAPH_V1", "Ribbon EDT", "secondary__FATHOM_FIELD_REFINED_EDT_DIAMETER"),
         ("FATHOM_FIELD_GRAPH_V1", "Ribbon Edge", "secondary__FATHOM_FIELD_REFINED_EDGE_DIAMETER"),
-        ("FATHOM_FIELD_GRAPH_V1", "Ribbon Profile", "secondary__FATHOM_FIELD_REFINED_PROFILE_DIAMETER"),
+        (
+            "FATHOM_FIELD_GRAPH_V1",
+            "Ribbon Profile",
+            "secondary__FATHOM_FIELD_REFINED_PROFILE_DIAMETER",
+        ),
     )
     rows: list[list[Any]] = []
     for method_id, label, source in estimators:
@@ -1882,7 +2302,7 @@ def _dataset_method_summary(comparisons: list[Any]) -> str:
             if source == "common":
                 distribution = result.common_distribution
             elif source.startswith("secondary__"):
-                distribution = result.secondary_distributions.get(source[len("secondary__"):])
+                distribution = result.secondary_distributions.get(source[len("secondary__") :])
             else:
                 distribution = None
             if distribution is None or distribution.diameter.size == 0:
@@ -1890,28 +2310,47 @@ def _dataset_method_summary(comparisons: list[Any]) -> str:
             available += 1
             medians.append(float(np.median(distribution.diameter)))
             if result.method_id == MethodId.FATHOM_FIELD_GRAPH_V1:
-                field_coverage = result.native_statistics.get("smooth_coverage_fraction") if "REFINED" in source else None
+                field_coverage = (
+                    result.native_statistics.get("smooth_coverage_fraction")
+                    if "REFINED" in source
+                    else None
+                )
                 if field_coverage is not None:
                     coverage_values.append(float(field_coverage))
         if not medians:
-            rows.append([label, "0", "—", "—", "—", "—"])
+            rows.append([label, "0", "—", "—", "—", "—", "—"])
             continue
         median = float(np.median(medians))
+        mean = float(np.mean(medians))
+        std = float(np.std(medians))
         iqr = float(np.quantile(medians, 0.75) - np.quantile(medians, 0.25))
         rows.append(
             [
                 label,
                 str(available),
-                _fmt(median),
-                _fmt(iqr),
+                _fmt_nm(median),
+                f"{_fmt_nm(mean)} ± {_fmt_nm(std)}",
+                _fmt_nm(iqr),
                 _fmt(float(np.median(coverage_values))) if coverage_values else "—",
                 "COMPLETE" if available else "NOT_RUN",
             ]
         )
     return table(
-        ["Estimator", "Images available", "Median of image medians (µm)", "IQR across image medians", "Median coverage", "Status"],
+        [
+            "Estimator",
+            "Images available",
+            "Median of image medians (nm)",
+            "Mean of image medians ± 1 SD (nm)",
+            "IQR across image medians (nm)",
+            "Median coverage",
+            "Status",
+        ],
         rows,
-    ) + "<p>Summary across images — not a pooled fiber distribution.</p>"
+    ) + (
+        "<p>Summary across images — not a pooled fiber distribution. "
+        "<b>Mean ± 1 SD</b> is the mean ± one standard deviation of the "
+        "per-image medians; it describes spread between images, not measurement uncertainty.</p>"
+    )
 
 
 def _dataset_ribbon_section(metrics: dict[str, Any], comparisons: list[Any]) -> str:
@@ -1941,10 +2380,26 @@ def _dataset_ribbon_section(metrics: dict[str, Any], comparisons: list[Any]) -> 
     improved = metrics["improved_count"]
     cards_html = cards(
         [
-            (f"{improved} / {len(comparisons)}", "Images with reduced EDT↔Edge W1", "after Ribbon refinement"),
-            (_fmt(median(w1_raw)) + " → " + _fmt(median(w1_refined)) + " µm", "Median W1 EDT↔Edge", "raw → Ribbon"),
-            (_fmt(median(shifts_observed)) + " → " + _fmt(median(shifts_residual)) + " µm", "Median center shift", "observed → residual"),
-            (_fmt(median(asymmetry_raw), 4) + " → " + _fmt(median(asymmetry_refined), 4), "Median asymmetry", "raw → refined"),
+            (
+                f"{improved} / {len(comparisons)}",
+                "Images with reduced EDT↔Edge W1",
+                "after Ribbon refinement",
+            ),
+            (
+                _fmt_nm(median(w1_raw)) + " → " + _fmt_nm(median(w1_refined)) + " nm",
+                "Median W1 EDT↔Edge",
+                "raw → Ribbon",
+            ),
+            (
+                _fmt(median(shifts_observed)) + " → " + _fmt(median(shifts_residual)) + " µm",
+                "Median center shift",
+                "observed → residual",
+            ),
+            (
+                _fmt(median(asymmetry_raw), 4) + " → " + _fmt(median(asymmetry_refined), 4),
+                "Median asymmetry",
+                "raw → refined",
+            ),
             (_fmt(median(coverage), 4), "Median Ribbon coverage", "supported centerline"),
         ]
     )
@@ -1974,28 +2429,65 @@ def _dataset_quality(comparisons: list[Any]) -> str:
                 ", ".join(field.quality_flags[:2]) or "—",
             ]
         )
-    return table(
-        ["Image", "Edge acc. raw", "Edge acc. refined", "Profile acc. raw", "Profile acc. refined", "Ribbon coverage", "Notable flags"],
-        rows,
-    ) + "<p>Ribbon coverage below 100% reflects intentional abstention (crossings, junctions, gaps, low-confidence regions).</p>"
+    return (
+        table(
+            [
+                "Image",
+                "Edge acc. raw",
+                "Edge acc. refined",
+                "Profile acc. raw",
+                "Profile acc. refined",
+                "Ribbon coverage",
+                "Notable flags",
+            ],
+            rows,
+        )
+        + "<p>Ribbon coverage below 100% reflects intentional abstention (crossings, junctions, gaps, low-confidence regions).</p>"
+    )
 
 
 def _methods_cards_dataset() -> str:
     from .report_style import cards
 
     entries = [
-        ("MATLAB SIMPoly", "Reference/native implementation consumed from a validated cache; native Gaussian center b1 reported. Common sample distribution unavailable from the current cache.", "COMPLETE (cache)"),
-        ("Python SIMPoly", "Python source-compatible approximation; calibrated length-weighted diameters on the skeleton.", "COMPLETE"),
-        ("Fathom Local", "Independent local cross-section estimator; not truth and may show a broader distribution.", "COMPLETE"),
-        ("Fathom Field", "Structure-tensor orientation plus local boundary metrology (EDT / paired edge / intensity profile) on the sampled centerline.", "EXPERIMENTAL"),
-        ("Oriented Ribbon V1", "Experimental refined centerline from paired opposite boundaries and re-measurement of the Field estimators on supported segments.", "EXPERIMENTAL"),
+        (
+            "MATLAB SIMPoly",
+            "Reference/native implementation consumed from a validated cache; native Gaussian center b1 reported. Common sample distribution unavailable from the current cache.",
+            "COMPLETE (cache)",
+        ),
+        (
+            "Python SIMPoly",
+            "Python source-compatible approximation; calibrated length-weighted diameters on the skeleton.",
+            "COMPLETE",
+        ),
+        (
+            "Fathom Local",
+            "Independent local cross-section estimator; not truth and may show a broader distribution.",
+            "COMPLETE",
+        ),
+        (
+            "Fathom Field",
+            "Structure-tensor orientation plus local boundary metrology (EDT / paired edge / intensity profile) on the sampled centerline.",
+            "EXPERIMENTAL",
+        ),
+        (
+            "Oriented Ribbon V1",
+            "Experimental refined centerline from paired opposite boundaries and re-measurement of the Field estimators on supported segments.",
+            "EXPERIMENTAL",
+        ),
         ("Manual 5×5", "Sparse human reference grid; not ground truth.", "REFERENCE"),
-        ("Consensus", "Equal-method quantile pseudo-reference across participating methods; not ground truth. Field Raw/Ribbon are variants of one method and do not add independent votes.", "REFERENCE"),
+        (
+            "Consensus",
+            "Equal-method quantile pseudo-reference across participating methods; not ground truth. Field Raw/Ribbon are variants of one method and do not add independent votes.",
+            "REFERENCE",
+        ),
     ]
     return cards([("", label, purpose + " · " + status) for label, purpose, status in entries])
 
 
-def _dataset_image_sections(output: Path, comparisons: list[Any], dataset: Any, manual_store: Any) -> str:
+def _dataset_image_sections(
+    output: Path, comparisons: list[Any], dataset: Any, manual_store: Any
+) -> str:
     from .report_style import cards
     from .report_style import figure as figure_block
 
@@ -2007,21 +2499,37 @@ def _dataset_image_sections(output: Path, comparisons: list[Any], dataset: Any, 
         _final_per_image_figures(image_dir, comparison, stem)
         field = next(r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1)
         values = _per_image_estimator_medians(field)
-        manual = manual_store.reviews.get(dataset.image_by_stem(stem).case_id) if manual_store is not None and dataset.image_by_stem(stem) is not None else None
+        manual = (
+            manual_store.reviews.get(dataset.image_by_stem(stem).case_id)
+            if manual_store is not None and dataset.image_by_stem(stem) is not None
+            else None
+        )
         manual_count = manual.measurement_count if manual is not None else 0
         card_items = [
-            ("Ribbon EDT", _fmt(values["edt_refined"]) + " µm", "median"),
-            ("Ribbon Edge", _fmt(values["edge_refined"]) + " µm", "median"),
-            ("Ribbon Profile", _fmt(values["profile_refined"]) + " µm", "median"),
+            ("Ribbon EDT", _fmt_nm(values["edt_refined"]) + " nm", "median"),
+            ("Ribbon Edge", _fmt_nm(values["edge_refined"]) + " nm", "median"),
+            ("Ribbon Profile", _fmt_nm(values["profile_refined"]) + " nm", "median"),
             ("Coverage", _fmt(values["smooth_coverage"], 4), "supported centerline"),
             ("Manual", f"{manual_count} / 25", "measurements"),
         ]
         body += f"<section id='image-{index + 1:02d}'>"
         body += f"<h3>{stem}</h3>"
         body += cards(card_items)
-        body += figure_block(f"images/{stem}/figure-A-primary-histogram.png", f"{stem} primary histogram", "Common diameter histogram, primary range.")
-        body += figure_block(f"images/{stem}/figure-B-ecdf.png", f"{stem} ECDF", "Diameter ECDF, full observed range.")
-        body += figure_block(f"images/{stem}/figure-C-field-ribbon.png", f"{stem} field raw vs Ribbon", "Field estimators raw vs Oriented Ribbon V1.")
+        body += figure_block(
+            f"images/{stem}/figure-A-primary-histogram.png",
+            f"{stem} primary histogram",
+            "Common diameter histogram, primary range.",
+        )
+        body += figure_block(
+            f"images/{stem}/figure-B-ecdf.png",
+            f"{stem} ECDF",
+            "Diameter ECDF, full observed range.",
+        )
+        body += figure_block(
+            f"images/{stem}/figure-C-field-ribbon.png",
+            f"{stem} field raw vs Ribbon",
+            "Field estimators raw vs Oriented Ribbon V1.",
+        )
         body += "</section>"
     return body
 
@@ -2055,9 +2563,7 @@ def _calibration_audit(dataset: Any, comparisons: list[Any]) -> list[dict[str, A
             entry["pixel_size_y_nm"] = float(doc.calibration.pixel_size_y_m) * 1e9
             entry["source"] = doc.calibration.source
             entry["calibrated"] = True
-            entry["isotropic"] = (
-                abs(entry["pixel_size_x_nm"] - entry["pixel_size_y_nm"]) < 1e-6
-            )
+            entry["isotropic"] = abs(entry["pixel_size_x_nm"] - entry["pixel_size_y_nm"]) < 1e-6
         except Exception:
             entry["calibrated"] = False
         comparison = next((c for c in comparisons if Path(c.image_id).stem == image.stem), None)
@@ -2109,12 +2615,9 @@ def _calibration_audit_summary(audit: list[dict[str, Any]]) -> str:
         ]
         for entry in audit
     ]
-    return (
-        f"<h3>Calibration</h3><p>{summary}</p>"
-        + details(
-            "Per-image calibration and ROI audit (technical)",
-            table(["Image", "px (nm)", "py (nm)", "Science ROI", "Source", "Status", "Symmetry"], rows),
-        )
+    return f"<h3>Calibration</h3><p>{summary}</p>" + details(
+        "Per-image calibration and ROI audit (technical)",
+        table(["Image", "px (nm)", "py (nm)", "Science ROI", "Source", "Status", "Symmetry"], rows),
     )
 
 
@@ -2146,7 +2649,9 @@ def _mixture_values(comparison: Any, estimator_key: str) -> tuple[np.ndarray, np
         (r for r in comparison.results if r.method_id == MethodId.FATHOM_FIELD_GRAPH_V1), None
     )
     if estimator_key == "PYTHON_SIMPOLY":
-        result = next((r for r in comparison.results if r.method_id == MethodId.PYTHON_SIMPOLY), None)
+        result = next(
+            (r for r in comparison.results if r.method_id == MethodId.PYTHON_SIMPOLY), None
+        )
         distribution = result.common_distribution if result is not None else None
         if distribution is None:
             return None
@@ -2195,7 +2700,13 @@ def _mixture_figure(
         diameter, weight = _dataset_mixture(comparisons, key)
         if diameter.size:
             distributions.append(
-                DiameterDistribution(diameter, weight, "um", Estimand.COMMON_LENGTH_WEIGHTED_DIAMETER, MethodId.CONSENSUS_PSEUDO_REFERENCE_V1)
+                DiameterDistribution(
+                    diameter,
+                    weight,
+                    "um",
+                    Estimand.COMMON_LENGTH_WEIGHTED_DIAMETER,
+                    MethodId.CONSENSUS_PSEUDO_REFERENCE_V1,
+                )
             )
     edges = common_histogram_edges(distributions) if distributions else np.array([])
     figure = Figure(figsize=(9.6, 4.4), dpi=130)
@@ -2203,21 +2714,32 @@ def _mixture_figure(
     if not edges.size:
         axis.text(0.5, 0.5, "No dataset distributions available", ha="center")
     else:
-        centers = edges[:-1] + np.diff(edges) / 2.0
         for key, label in zip(keys, labels, strict=False):
             diameter, weight = _dataset_mixture(comparisons, key)
             if diameter.size == 0:
                 continue
-            distribution = DiameterDistribution(diameter, weight, "um", Estimand.COMMON_LENGTH_WEIGHTED_DIAMETER, MethodId.CONSENSUS_PSEUDO_REFERENCE_V1)
-            color, style, _short = _mixture_style(key)
-            axis.plot(
-                centers, _weighted_density(distribution, edges),
-                label=label, color=color, linestyle=style, linewidth=1.9, drawstyle="steps-mid",
+            distribution = DiameterDistribution(
+                diameter,
+                weight,
+                "um",
+                Estimand.COMMON_LENGTH_WEIGHTED_DIAMETER,
+                MethodId.CONSENSUS_PSEUDO_REFERENCE_V1,
+            )
+            color, _style, _short = _mixture_style(key)
+            axis.bar(
+                (edges[:-1] + np.diff(edges) / 2.0) * 1000.0,
+                _weighted_density(distribution, edges) / 1000.0,
+                width=np.diff(edges) * 1000.0,
+                color=color,
+                alpha=0.55,
+                edgecolor="none",
+                align="center",
+                label=label,
             )
     if x_max is not None and edges.size:
-        axis.set_xlim(0, x_max)
-    axis.set_xlabel("Diameter (µm)")
-    axis.set_ylabel("Equal-image weighted density (1/µm)")
+        axis.set_xlim(0, x_max * 1000.0)
+    axis.set_xlabel("Diameter (nm)")
+    axis.set_ylabel("Equal-image weighted density (1/nm)")
     axis.set_title(title)
     axis.grid(alpha=0.2)
     axis.legend(fontsize="small", ncol=2, loc="upper right")
@@ -2264,33 +2786,48 @@ def _dataset_distribution_section(comparisons: list[Any], output: Path) -> str:
             p99s.append(float(weighted_quantile(diameter, weight, np.array([0.99]))[0]))
     x_max = float(np.max(p99s)) * 1.12 if p99s else None
 
-    _mixture_figure(comparisons, output, primary_keys=[k for k, _ in primary], primary_labels=primary_names,
-                    include_local=False, filename="dataset-distribution-primary.png",
-                    title="Dataset-wide diameter distribution — primary range (equal image weight)",
-                    x_max=x_max)
-    _mixture_figure(comparisons, output, primary_keys=[k for k, _ in primary], primary_labels=primary_names,
-                    include_local=True, filename="dataset-distribution-full.png",
-                    title="Dataset-wide diameter distribution — full observed range (equal image weight)",
-                    x_max=None)
+    _mixture_figure(
+        comparisons,
+        output,
+        primary_keys=[k for k, _ in primary],
+        primary_labels=primary_names,
+        include_local=False,
+        filename="dataset-distribution-primary.png",
+        title="Dataset-wide diameter distribution — primary range (equal image weight)",
+        x_max=x_max,
+    )
+    _mixture_figure(
+        comparisons,
+        output,
+        primary_keys=[k for k, _ in primary],
+        primary_labels=primary_names,
+        include_local=True,
+        filename="dataset-distribution-full.png",
+        title="Dataset-wide diameter distribution — full observed range (equal image weight)",
+        x_max=None,
+    )
 
     rows = []
     for key, label in primary + [("FATHOM_LOCAL", "Fathom Local")]:
         diameter, weight = _dataset_mixture(comparisons, key)
         if diameter.size == 0:
-            rows.append([label, "0", "—", "—", "—", "—", "—"])
+            rows.append([label, "0", "—", "—", "—", "—", "—", "—"])
             continue
         from .core.distributions import weighted_quantile
 
         q = weighted_quantile(diameter, weight, np.array([0.05, 0.25, 0.5, 0.75, 0.95]))
+        mean = float(np.average(diameter, weights=weight))
+        std = float(np.sqrt(np.average((diameter - mean) ** 2, weights=weight)))
         images = sum(1 for c in comparisons if _mixture_values(c, key) is not None)
         rows.append(
             [
                 label,
                 str(images),
-                _fmt(float(q[2])),
-                _fmt_range(float(q[1]), float(q[3])),
-                _fmt(float(q[0])),
-                _fmt(float(q[4])),
+                _fmt_nm(float(q[2])),
+                f"{_fmt_nm(mean)} ± {_fmt_nm(std)}",
+                _fmt_range_nm(float(q[1]), float(q[3])),
+                _fmt_nm(float(q[0])),
+                _fmt_nm(float(q[4])),
                 "long tail shown in full range" if key == "FATHOM_LOCAL" else "—",
             ]
         )
@@ -2299,12 +2836,14 @@ def _dataset_distribution_section(comparisons: list[Any], output: Path) -> str:
         "distributions are normalized to unit mass and then averaged. The local "
         "sample count of an image does not determine its influence.</p>"
         "<p>This is a descriptive dataset-level mixture across SEM fields, not an "
-        "inferential pooled population model.</p>"
+        "inferential pooled population model. <b>Mean ± 1 SD</b> is the weighted "
+        "mean ± one weighted standard deviation of the equal-image-weight mixture "
+        "diameters (sample spread, not measurement uncertainty).</p>"
         + figure_block(
             "dataset-distribution-primary.png",
             "Dataset-wide diameter distribution, primary range",
             "Equal-image-weight mixture of the comparable automatic estimators. "
-            "Calibration is mixed across the dataset (see Dataset overview); values are physical µm.",
+            "Calibration is mixed across the dataset (see Dataset overview); values are physical nm.",
         )
         + figure_block(
             "dataset-distribution-full.png",
@@ -2313,7 +2852,16 @@ def _dataset_distribution_section(comparisons: list[Any], output: Path) -> str:
             "no observations are removed.",
         )
         + table(
-            ["Estimator", "Images", "Mixture median", "IQR", "P05", "P95", "Notes"],
+            [
+                "Estimator",
+                "Images",
+                "Mixture median (nm)",
+                "Mean ± 1 SD (nm)",
+                "IQR (nm)",
+                "P05 (nm)",
+                "P95 (nm)",
+                "Notes",
+            ],
             rows,
         )
         + "<p>If multiple modes appear, they may reflect real morphological populations, "
@@ -2411,7 +2959,7 @@ def _final_ribbon_box(metrics: dict[str, Any]) -> str:
         f"<div class='info'><b>Oriented Ribbon V1 (experimental):</b> "
         f"{metrics['improved_count']}/{metrics['total']} images show "
         "W1(refined EDT ↔ refined Edge) &lt; W1(raw EDT ↔ raw Edge); "
-        f"dataset median W1 {statistics.median(w1_raw):.3f} → {statistics.median(w1_refined):.3f} µm.</div>"
+        f"dataset median W1 {statistics.median(w1_raw) * 1000.0:.3f} → {statistics.median(w1_refined) * 1000.0:.3f} nm.</div>"
     )
 
 
@@ -2432,10 +2980,7 @@ def _final_provenance(
         ["Dataset", str(dataset.dataset_id)],
         ["MATLAB cache", "validated controlled-origin cache; native b1 only"],
     ]
-    hashes = {
-        image.case_id: image.sha256[:12] if image.sha256 else "—"
-        for image in dataset.images
-    }
+    hashes = {image.case_id: image.sha256[:12] if image.sha256 else "—" for image in dataset.images}
     for case_id, short_hash in list(hashes.items())[:4]:
         rows.append([f"Image hash {case_id}", short_hash])
     calibration_rows = ""
@@ -2450,9 +2995,13 @@ def _final_provenance(
                     _fmt(entry["pixel_size_x_nm"]),
                     _fmt(entry["pixel_size_y_nm"]),
                     entry["source"] or "—",
-                    "isotropic" if entry["isotropic"] else ("anisotropic" if entry["calibrated"] else "missing"),
+                    "isotropic"
+                    if entry["isotropic"]
+                    else ("anisotropic" if entry["calibrated"] else "missing"),
                 ]
                 for entry in calibration_audit
             ],
         )
-    return details("Provenance / Reproducibility", table(["Item", "Value"], rows) + calibration_rows)
+    return details(
+        "Provenance / Reproducibility", table(["Item", "Value"], rows) + calibration_rows
+    )

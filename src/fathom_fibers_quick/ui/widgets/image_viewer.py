@@ -545,6 +545,4 @@ class ScientificImageView(QGraphicsView):
     def _format_length(value_m: float) -> str:
         if value_m >= 1e-3:
             return f"{value_m * 1e3:g} mm"
-        if value_m >= 1e-6:
-            return f"{value_m * 1e6:g} µm"
         return f"{value_m * 1e9:g} nm"
