@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -65,22 +64,10 @@ def _inventory(directory: str, output: str) -> int:
     return 0
 
 
-def _version_text() -> str:
-    from ._build_info import describe
-
-    return describe()
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="fathom-fibers",
         description="Scientific fiber measurement engine and desktop workspace",
-    )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=_version_text(),
-        help="Show application version, source commit and platform",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -102,7 +89,7 @@ def main() -> None:
     inventory.add_argument("--output", "-o", default="zeiss_inventory.csv")
 
     eval_roi = sub.add_parser("evaluate-auto-roi", help="Evaluate Auto-ROI campaign on Zeiss TIFFs")
-    eval_roi.add_argument("--input-dir", "-i", default="data/zeiss")
+    eval_roi.add_argument("--input-dir", "-i", default="local_data/zeiss")
     eval_roi.add_argument("--output-dir", "-o", default="local_results/auto_roi_campaign")
 
     sub.add_parser("benchmark", help="Run the bundled deterministic SIMPoly benchmark")
@@ -131,41 +118,6 @@ def main() -> None:
     campaign_run.add_argument("--workers", type=int, default=1)
     campaign_run.add_argument("--timeout", type=float, default=900)
     campaign_sub.add_parser("report", help="Build review queue and HTML report")
-    unified_campaign = campaign_sub.add_parser(
-        "unified", help="Run cached MATLAB/Python/Fathom unified comparison"
-    )
-    unified_campaign.add_argument(
-        "--dataset", type=Path, default=Path(os.environ.get("FATHOM_ZEISS_DATASET", "data/zeiss"))
-    )
-    unified_campaign.add_argument("--matlab-cache-root", type=Path)
-    unified_campaign.add_argument("--resume", action="store_true")
-    unified_campaign.add_argument("--case", help="Run one canonical case while preserving unified artifacts")
-    campaign_sub.add_parser("unified-report", help="Render unified comparison HTML report")
-
-    validation = sub.add_parser("validation", help="Headless validation reports")
-    validation_sub = validation.add_subparsers(dest="validation_action", required=True)
-    ribbon_report = validation_sub.add_parser(
-        "oriented-ribbon", help="Oriented Ribbon V1 validation report (synthetic + 16 TIFF)"
-    )
-    ribbon_report.add_argument(
-        "--dataset",
-        type=Path,
-        default=Path(os.environ.get("FATHOM_ZEISS_DATASET", "data/zeiss")),
-    )
-    ribbon_report.add_argument("--repo", type=Path, default=Path("."))
-
-    methods = sub.add_parser("methods", help="List unified scientific method backends")
-    methods_sub = methods.add_subparsers(dest="methods_action", required=True)
-    methods_sub.add_parser("list", help="List methods and capabilities")
-
-    analyze = sub.add_parser("analyze", help="Run unified methods on one image")
-    analyze.add_argument("--image", required=True)
-    analyze.add_argument("--methods", default="matlab-simpoly,python-simpoly,fathom-local,fathom-field-graph")
-    analyze.add_argument("--matlab-cache-root", type=Path)
-
-    compare = sub.add_parser("compare", help="Compare unified methods on one image")
-    compare.add_argument("--image", required=True)
-    compare.add_argument("--matlab-cache-root", type=Path)
 
     args = parser.parse_args()
     if args.command in {None, "gui"}:
@@ -224,58 +176,6 @@ def main() -> None:
         _runs, _comparisons, summary = run_synthetic_benchmark_suite()
         print(json.dumps(summary, indent=2, sort_keys=True))
         return
-    if args.command == "methods":
-        from .core.methods import MethodId
-
-        capability_sets = {
-            MethodId.MATLAB_SIMPOLY: ("GLOBAL_DIAMETER_DISTRIBUTION", "LOCAL_EDT_DIAMETERS", "MASK", "SKELETON"),
-            MethodId.PYTHON_SIMPOLY: ("GLOBAL_DIAMETER_DISTRIBUTION", "LOCAL_EDT_DIAMETERS", "MASK", "SKELETON", "MATLAB_COMPATIBILITY_EVIDENCE"),
-            MethodId.FATHOM_LOCAL: ("LOCAL_METROLOGY", "CROSS_SECTIONS", "MANUAL_REVIEW", "QUALITY_FLAGS"),
-            MethodId.FATHOM_FIELD_GRAPH_V1: ("MASK", "SKELETON", "ORIENTATION_FIELD", "LOCAL_RADIUS", "LOCAL_DIAMETER", "GLOBAL_DIAMETER_DISTRIBUTION"),
-            MethodId.MANUAL_5X5_REFERENCE: ("MANUAL_REVIEW", "LOCAL_METROLOGY"),
-            MethodId.CONSENSUS_PSEUDO_REFERENCE_V1: (),
-        }
-        print(json.dumps([
-            {
-                "method_id": method.value,
-                "capabilities": capability_sets[method],
-                "status": "EXPERIMENTAL_FIELD_MEASURING" if method == MethodId.FATHOM_FIELD_GRAPH_V1 else None,
-                "note": "PARTIAL; KNOWN_LIBRARY_DIVERGENCE: bwskel" if method == MethodId.PYTHON_SIMPOLY else None,
-            }
-            for method in MethodId
-        ], indent=2))
-        return
-    if args.command == "validation" and args.validation_action == "oriented-ribbon":
-        from .validation.oriented_ribbon_validation import build_oriented_ribbon_report
-
-        index = build_oriented_ribbon_report(args.repo, dataset_dir=args.dataset)
-        print(index)
-        return 0
-    if args.command in {"analyze", "compare"}:
-        from .api import FathomEngine
-
-        engine = FathomEngine()
-        image = engine.open_image(args.image)
-        comparison = engine.compare_all_methods(image, matlab_cache_root=args.matlab_cache_root)
-        print(json.dumps({
-            "image_id": comparison.image_id,
-            "methods": [
-                {
-                    "method": result.method_id.value,
-                    "status": result.status.value,
-                    "native_estimand": result.native_estimand.value if result.native_estimand else None,
-                    "native_result": result.native_result,
-                    "flags": result.quality_flags,
-                }
-                for result in comparison.results
-            ],
-            "agreements": [
-                {"left": item.left_method.value, "right": item.right_method.value, "wasserstein_1": item.wasserstein_1, "median_difference": item.median_difference}
-                for item in comparison.agreements
-            ],
-            "consensus": {"participating_methods": [item.value for item in comparison.consensus.participating_methods], "excluded_methods": comparison.consensus.excluded_methods, "label": "CONSENSUS_PSEUDO_REFERENCE_V1"},
-        }, indent=2, default=str))
-        return
     if args.command == "oracle":
         from .validation.matlab_oracle import MatlabOracle
 
@@ -317,24 +217,6 @@ def main() -> None:
         )
 
         repo = Path.cwd().resolve()
-        if args.campaign_action in {"unified", "unified-report"}:
-            from .validation.unified_methods import generate_unified_report, run_unified_campaign
-
-            if args.campaign_action == "unified-report":
-                print(generate_unified_report(repo))
-            else:
-                cache_root = args.matlab_cache_root or Path(
-                    os.environ.get("FATHOM_MATLAB_CACHE_ROOT", "")
-                )
-                report = run_unified_campaign(
-                    repo,
-                    dataset=args.dataset,
-                    matlab_cache_root=cache_root if str(cache_root) else None,
-                    resume=args.resume,
-                    case=args.case,
-                )
-                print(f"Unified campaign: {len(report.images)} complete, {len(report.failures)} failed")
-            return
         if args.campaign_action == "inventory":
             payload = inventory_dataset(repo, args.dataset)
             print(f"Frozen {payload['case_count']} cases for {payload['dataset_id']}")
@@ -345,13 +227,7 @@ def main() -> None:
         if args.workers < 1:
             parser.error("--workers must be positive")
         methods = {value.strip() for value in args.methods.split(",") if value.strip()}
-        unknown = methods - {
-            "matlab-simpoly",
-            "python-simpoly",
-            "fathom",
-            "fathom-local",
-            "fathom-field-graph",
-        }
+        unknown = methods - {"matlab-simpoly", "python-simpoly", "fathom"}
         if unknown:
             parser.error(f"unknown methods: {', '.join(sorted(unknown))}")
         # MATLAB is deliberately a single batch session. Python SIMPoly and
@@ -360,7 +236,7 @@ def main() -> None:
             print(
                 f"MATLAB results: {run_matlab_campaign(repo, timeout=max(args.timeout, 900) * 16, force=args.force)}"
             )
-        if methods & {"python-simpoly", "fathom", "fathom-local", "fathom-field-graph"}:
+        if methods & {"python-simpoly", "fathom"}:
             print(
                 "Python results: "
                 f"{run_python_campaign(repo, case=args.case, limit=args.limit, resume=args.resume, force=args.force, timeout=args.timeout, workers=args.workers)}"

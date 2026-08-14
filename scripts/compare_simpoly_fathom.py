@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from fathom_fibers_quick.oracles.simpoly_source import (
@@ -14,14 +13,14 @@ from fathom_fibers_quick.zeiss import load_image_document
 
 
 def compare_simpoly_and_fathom_on_zeiss():
-    tiff_dir = Path(os.environ.get("FATHOM_ZEISS_DATASET", "data/zeiss"))
+    tiff_dir = Path("local_data/zeiss")
     if not tiff_dir.exists():
-        print("Zeiss dataset directory not found. Skipping Zeiss comparison.")
+        print("local_data/zeiss directory not found. Skipping Zeiss comparison.")
         return
 
     all_tiffs = list(tiff_dir.rglob("*.tif")) + list(tiff_dir.rglob("*.tiff"))
     if not all_tiffs:
-        print("No TIFF images found in the Zeiss dataset directory.")
+        print("No TIFF images found in local_data/zeiss.")
         return
 
     results = []

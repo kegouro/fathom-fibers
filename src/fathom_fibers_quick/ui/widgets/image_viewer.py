@@ -91,7 +91,6 @@ class ScientificImageView(QGraphicsView):
     recordSelected = Signal(object)
     geometryEdited = Signal(str, dict)
     roiDrawn = Signal(object)
-    fieldSampleClicked = Signal(int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -132,17 +131,11 @@ class ScientificImageView(QGraphicsView):
         self._inverted = False
         self._space_pan = False
         self._last_pan: QPoint | None = None
-        self._scientific_layers: object | None = None
-        self._target_item: QGraphicsRectItem | None = None
-        self._target_cross: list[QGraphicsItem] = []
-        self._field_selection_item: QGraphicsRectItem | None = None
 
         self.tools = ToolController()
         self.tools.committed.connect(self._tool_committed)
         self.tools.previewChanged.connect(self._show_preview)
         self.scene().selectionChanged.connect(self._scene_selection_changed)
-        select_tool = self.tools.tools["select"]
-        select_tool.pointSelected.connect(self._field_hit_test)
 
     def set_image(self, image: ScientificImage | None) -> None:
         self.image = image
@@ -476,65 +469,6 @@ class ScientificImageView(QGraphicsView):
         self.scene().addItem(line)
         self.scene().addItem(label)
         self._scale_items.extend((line, label))
-
-    def set_scientific_overlays(self, layers) -> None:
-        """Attach an :class:`~..overlays.OverlayLayers` manager to this view."""
-        if layers is not self._scientific_layers:
-            self._scientific_layers = layers
-        if layers is not None:
-            layers.view = self
-
-    def set_manual_target(self, rect: QRectF | None) -> None:
-        if self._target_item is not None:
-            self.scene().removeItem(self._target_item)
-            self._target_item = None
-        for item in self._target_cross:
-            self.scene().removeItem(item)
-        self._target_cross = []
-        if rect is None:
-            return
-        pen = QPen(QColor("#ffd166"), 1.6)
-        pen.setCosmetic(True)
-        pen.setStyle(Qt.PenStyle.DashLine)
-        self._target_item = QGraphicsRectItem(rect)
-        self._target_item.setPen(pen)
-        self._target_item.setZValue(60)
-        self.scene().addItem(self._target_item)
-        center = rect.center()
-        cross_pen = QPen(QColor("#ffd166"), 1.0)
-        cross_pen.setCosmetic(True)
-        for dx, dy in ((1.0, 0.0), (0.0, 1.0)):
-            item = QGraphicsLineItem(
-                center.x() - 12.0 * dx - 0.0 * dy,
-                center.y() - 12.0 * dy - 0.0 * dx,
-                center.x() + 12.0 * dx + 0.0 * dy,
-                center.y() + 12.0 * dy + 0.0 * dx,
-            )
-            item.setPen(cross_pen)
-            item.setZValue(60)
-            self.scene().addItem(item)
-            self._target_cross.append(item)
-
-    def set_field_selection_highlight(self, rect: QRectF | None) -> None:
-        if self._field_selection_item is not None:
-            self.scene().removeItem(self._field_selection_item)
-            self._field_selection_item = None
-        if rect is None:
-            return
-        pen = QPen(QColor("#40e0ff"), 2.0)
-        pen.setCosmetic(True)
-        self._field_selection_item = QGraphicsRectItem(rect)
-        self._field_selection_item.setPen(pen)
-        self._field_selection_item.setZValue(70)
-        self.scene().addItem(self._field_selection_item)
-
-    def _field_hit_test(self, point: QPointF) -> None:
-        layers = self._scientific_layers
-        if layers is None:
-            return
-        index = layers.hit_test_field_sample(point)
-        if index is not None:
-            self.fieldSampleClicked.emit(index)
 
     @staticmethod
     def _format_length(value_m: float) -> str:

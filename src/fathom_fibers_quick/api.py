@@ -25,13 +25,6 @@ from .measurement_geometry import (
     compute_profile_geometry,
 )
 from .measurement_records import MeasurementKind, MeasurementRecord
-from .methods import (
-    classical_field_adapter,
-    fathom_local_adapter,
-    manual_adapter,
-    matlab_simpoly_cached_adapter,
-    python_simpoly_adapter_with_intermediates,
-)
 from .model import Calibration
 from .oracles.simpoly_source import (
     PROFILE_CONTROLLED_INPUT_V1,
@@ -40,7 +33,6 @@ from .oracles.simpoly_source import (
     SIMPolySourceResult,
     run_simpoly_source_pipeline,
 )
-from .unified_comparison import UnifiedMethodComparison, compare_method_results
 from .zeiss import detect_footer, load_image_document
 
 
@@ -275,38 +267,6 @@ class FathomEngine:
             row("MANUAL", "MANUAL_ACCEPTED_SECTIONS", manual_px, float(np.mean(manual_px)) if manual_px else None),
         )
         return MethodComparisonResult(roi, rows, simpoly, intermediates, fathom)
-
-    def compare_all_methods(
-        self,
-        image: ScientificImage,
-        *,
-        roi_bbox: tuple[int, int, int, int] | None = None,
-        manual_measurements: Sequence[MeasurementRecord] = (),
-        matlab_cache_root: str | Path | None = None,
-    ) -> UnifiedMethodComparison:
-        """Compare independent outputs on an explicit common estimand.
-
-        MATLAB data are consumed only from a validated cache; this call never
-        launches MATLAB or changes any scientific-method parameters.
-        """
-        python_result, intermediates = python_simpoly_adapter_with_intermediates(
-            self, image, roi_bbox=roi_bbox
-        )
-        return compare_method_results(
-            (
-                matlab_simpoly_cached_adapter(
-                    image, roi_bbox=roi_bbox, cache_root=matlab_cache_root
-                ),
-                python_result,
-                fathom_local_adapter(self, image, roi_bbox=roi_bbox),
-                classical_field_adapter(
-                    image,
-                    roi_bbox=roi_bbox,
-                    mask=intermediates.thickened_mask,
-                ),
-                manual_adapter(image, manual_measurements, roi_bbox=roi_bbox),
-            )
-        )
 
 
 __all__ = ["FathomEngine", "ScientificImage", "ScientificMeasurement"]

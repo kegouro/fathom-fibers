@@ -27,8 +27,7 @@ EXPECTED_ORIGINAL_SHA256 = "6cbb827ebfa92a2f951d3fd06cb3561d81854ddd8fc4fc9f8f7b
 
 def test_original_matlab_source_sha256_manifest():
     original_path = Path(".reference/simpoly/original/SIMPolyMatlabCode.m")
-    if not original_path.exists():
-        pytest.skip("private MATLAB source not present; set up the reference checkout")
+    assert original_path.exists()
 
     data = original_path.read_bytes()
     calc_sha = hashlib.sha256(data).hexdigest()

@@ -1,0 +1,68 @@
+name: Publish v0.2.0-rc1
+
+# One-shot bridge for the already verified 2026-08-13 tag build.
+# Delete this workflow after the release has been published; future tags are
+# handled by release-build.yml directly.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publish-v0.2.0-rc1.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish verified tag artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v0.2.0-rc1
+          VERIFIED_RUN_ID: "31753367427"
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG is already published; nothing to do."
+            exit 0
+          fi
+
+          run_json=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$VERIFIED_RUN_ID")
+          conclusion=$(jq -r '.conclusion' <<<"$run_json")
+          head_sha=$(jq -r '.head_sha' <<<"$run_json")
+          head_branch=$(jq -r '.head_branch' <<<"$run_json")
+          tag_sha=$(git rev-list -n 1 "$TAG")
+
+          if [ "$conclusion" != "success" ] || [ "$head_branch" != "$TAG" ] || [ "$head_sha" != "$tag_sha" ]; then
+            echo "Refusing to publish: verified workflow run does not match the successful $TAG build." >&2
+            exit 1
+          fi
+
+          mkdir -p release-assets
+          gh run download "$VERIFIED_RUN_ID" --dir release-assets
+
+          mapfile -t assets < <(
+            find release-assets -type f \
+              \( -name 'FathomFibers-*.tar.gz' -o -name 'FathomFibers-*.zip' -o -name 'FathomFibers-*.sha256' \) \
+              | sort
+          )
+          if [ "${#assets[@]}" -lt 8 ]; then
+            echo "Expected four native archives plus four checksum sidecars." >&2
+            printf '%s\n' "${assets[@]}" >&2
+            exit 1
+          fi
+
+          gh release create "$TAG" "${assets[@]}" \
+            --verify-tag \
+            --prerelease \
+            --title "Fathom Fibers v0.2.0-rc1" \
+            --notes-file .github/release-notes/v0.2.0-rc1.md

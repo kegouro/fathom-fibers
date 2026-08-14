@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -183,7 +182,7 @@ img {{ max-width: 100%; border-radius: 4px; border: 1px solid #555; }}
 
 
 def main() -> None:
-    tiff_dir = Path(os.environ.get("FATHOM_ZEISS_DATASET", "data/zeiss"))
+    tiff_dir = Path("local_data/zeiss")
     output_dir = Path("local_results/real_zeiss_campaign")
     res_path, inv, rois = run_real_campaign(tiff_dir, output_dir)
     print(f"Campaña real completada. Reporte generado en: {res_path}")

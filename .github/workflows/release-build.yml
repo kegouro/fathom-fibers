@@ -6,6 +6,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: ${{ matrix.os }} (${{ matrix.arch }})
@@ -55,6 +58,16 @@ jobs:
           python -m ruff check .
         shell: bash
 
+      - name: Validate tag matches package release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          expected="v$(python -c 'import runpy; print(runpy.run_path("src/fathom_fibers_quick/release_scheme.py")["HUMAN_VERSION"])')"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match release scheme $expected" >&2
+            exit 1
+          fi
+
       - name: Build release
         run: python packaging/build_release.py
         shell: bash
@@ -76,5 +89,51 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # NOTE: no GitHub Release is created automatically from CI; the tag
-  # trigger only builds and verifies. Publishing happens manually.
+  publish:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download native build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: FathomFibers-release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          mapfile -t assets < <(
+            find release-assets -maxdepth 1 -type f \
+              \( -name 'FathomFibers-*.tar.gz' -o -name 'FathomFibers-*.zip' -o -name 'FathomFibers-*.sha256' \) \
+              | sort
+          )
+          if [ "${#assets[@]}" -lt 8 ]; then
+            printf 'Expected four archives plus four SHA256 sidecars; found %s\n' "${#assets[@]}" >&2
+            printf '%s\n' "${assets[@]}" >&2
+            exit 1
+          fi
+
+          prerelease=()
+          case "$GITHUB_REF_NAME" in
+            *-rc*|*-alpha*|*-beta*) prerelease+=(--prerelease) ;;
+          esac
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --verify-tag \
+              --generate-notes \
+              --title "Fathom Fibers $GITHUB_REF_NAME" \
+              "${prerelease[@]}"
+          fi

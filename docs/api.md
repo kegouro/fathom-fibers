@@ -34,7 +34,7 @@ mutation belongs to `ProjectSession`.
 ## Zeiss TIFF
 
 ```python
-image = engine.open_image("sample.tif")
+image = engine.open_image("PVDF Jose_02.tif")
 print(image.calibration.pixel_size_x_m)
 print(image.footer_bounds)
 print(image.source_sha256)

@@ -11,10 +11,7 @@ from typing import Any
 
 from scipy.io import loadmat
 
-# Never hardcode a machine-specific MATLAB install path in source; the
-# executable is provided through the FATHOM_MATLAB_EXECUTABLE environment
-# variable by the operator or validation runner.
-DEFAULT_MATLAB: Path | None = None
+DEFAULT_MATLAB = Path("/home/kegouro/.local/opt/MATLAB/R2026a/bin/matlab")
 CANONICAL_SOURCE_SHA256 = "6cbb827ebfa92a2f951d3fd06cb3561d81854ddd8fc4fc9f8f7bb1151ad1f446"
 
 
@@ -27,8 +24,6 @@ class MatlabOracle:
     def discover(cls, repo: Path) -> MatlabOracle | None:
         configured = os.environ.get("FATHOM_MATLAB_EXECUTABLE")
         candidate = Path(configured) if configured else DEFAULT_MATLAB
-        if candidate is None:
-            return None
         resolved = shutil.which(str(candidate))
         if not resolved:
             return None

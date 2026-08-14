@@ -28,7 +28,6 @@ from ..oracles.simpoly_source import (
 )
 from ..project_io import load_project, save_project
 from ..protocols import BUILTIN_PROTOCOLS
-from ..unified_comparison import UnifiedMethodComparison
 
 
 class ProjectSession:
@@ -461,14 +460,6 @@ class ProjectSession:
     def compare_methods(self) -> MethodComparisonResult:
         project, image = self._require()
         return self.engine.compare_methods(
-            image,
-            roi_bbox=self.roi_bbox,
-            manual_measurements=project.records,
-        )
-
-    def compare_all_methods(self) -> UnifiedMethodComparison:
-        project, image = self._require()
-        return self.engine.compare_all_methods(
             image,
             roi_bbox=self.roi_bbox,
             manual_measurements=project.records,

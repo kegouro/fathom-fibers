@@ -1,124 +1,115 @@
 # Fathom Fibers
 
-Fathom Fibers is a scientific desktop workspace and headless Python library for
-projected 2D fiber measurements in microscopy images. It reads Zeiss SEM TIFF
-calibration, supports manual and reviewable assisted workflows, and exposes the
-same scientific engine to the PySide6 application and SPMKit adapter.
+**Scientific desktop workspace and headless Python engine for calibrated projected 2D fiber morphology analysis in SEM images.**
 
-> Measurements represent projected 2D geometry. Automatic results enter as
-> `PROPOSED` and are excluded from primary statistics until reviewed.
+[![Release](https://img.shields.io/github/v/release/kegouro/fathom-fibers?include_prereleases&label=release)](https://github.com/kegouro/fathom-fibers/releases)
+[![Release build](https://github.com/kegouro/fathom-fibers/actions/workflows/release-build.yml/badge.svg)](https://github.com/kegouro/fathom-fibers/actions/workflows/release-build.yml)
+[![Python](https://img.shields.io/badge/Python-%E2%89%A53.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Release artifacts
+Fathom Fibers combines a reviewable **PySide6 desktop application** with a **Qt-free scientific core**. It reads calibrated microscopy images, supports manual and assisted measurements, compares multiple estimators on common units, and exports reproducible reports with provenance.
 
-Prebuilt, portable desktop releases (no Python installation required) are
-provided for Linux, Windows and macOS:
+> **Scientific status.** Measurements represent **projected 2D geometry**. Automatic measurements enter as `PROPOSED` and are excluded from primary statistics until reviewed. Python SIMPoly is a source-compatible approximation with known library divergences; Fathom Field and Oriented Ribbon V1 are experimental. Manual 5×5 is a sparse human reference and Consensus is a pseudo-reference — neither is claimed as ground truth.
 
-`FathomFibers-0.2.0-rc1-<platform>-<arch>.tar.gz` / `.zip`
+![Fathom Fibers scientific workspace](docs/assets/workspace.png)
 
-Each archive contains the application, `README_FIRST.md`, `LICENSE`,
-`CHANGELOG.md` and `VERSION`. Scientific status: Python SIMPoly is a
-source-compatible approximation validated against MATLAB with a known library
-divergence; Fathom Field and Oriented Ribbon V1 are experimental; Manual 5×5
-is a sparse human reference; Consensus is a pseudo-reference. Real SEM results
-characterize agreement, not known absolute accuracy.
+<sub>Real Fathom Fibers UI, captured from the release build with deterministic synthetic calibrated data. No private SEM data are embedded in the repository.</sub>
 
-## Start in under two minutes
+## Download
+
+**v0.2.0-rc1** ships as portable native desktop builds. No Python installation is required.
+
+| Platform | Architecture | Package |
+|---|---:|---|
+| Linux | x86_64 | [FathomFibers-0.2.0-rc1-linux-x86_64.tar.gz](https://github.com/kegouro/fathom-fibers/releases/download/v0.2.0-rc1/FathomFibers-0.2.0-rc1-linux-x86_64.tar.gz) |
+| Windows | x86_64 / AMD64 | [FathomFibers-0.2.0-rc1-windows-amd64.zip](https://github.com/kegouro/fathom-fibers/releases/download/v0.2.0-rc1/FathomFibers-0.2.0-rc1-windows-amd64.zip) |
+| macOS | Apple Silicon (arm64) | [FathomFibers-0.2.0-rc1-macos-arm64.tar.gz](https://github.com/kegouro/fathom-fibers/releases/download/v0.2.0-rc1/FathomFibers-0.2.0-rc1-macos-arm64.tar.gz) |
+| macOS | Intel (x86_64) | [FathomFibers-0.2.0-rc1-macos-x86_64.tar.gz](https://github.com/kegouro/fathom-fibers/releases/download/v0.2.0-rc1/FathomFibers-0.2.0-rc1-macos-x86_64.tar.gz) |
+
+Each archive is published with a matching `.sha256` sidecar. See the [release page](https://github.com/kegouro/fathom-fibers/releases/tag/v0.2.0-rc1) for notes and checksums.
+
+After extracting the archive, launch the bundled `FathomFibers` executable (`FathomFibers.exe` on Windows).
+
+## What it does
+
+- **Calibrated microscopy input** — Zeiss SEM TIFF metadata, anisotropic pixel calibration, valid-image-body/footer handling and explicit physical units.
+- **Scientific desktop workspace** — dataset navigation, per-image result cache, background method execution, progress reporting and reviewable overlays.
+- **Manual metrology** — projected width, distance, polyline/tortuosity, angle, rectangle/polygon ROI and intensity profile tools.
+- **Manual 5×5 reference protocol** — 25 targets per image with immediate autosave and resumable progress.
+- **Method comparison** — common units/bins, weighted diameter distributions, ECDFs, Wasserstein-1, KS and median-difference summaries.
+- **Multiple estimators** — Python SIMPoly, Fathom Local, Fathom Field estimator variants and experimental Oriented Ribbon V1 infrastructure.
+- **Reproducible output** — image-level and dataset-level HTML reports, CSV/JSON exports, figures, source hashes and provenance.
+- **Headless use** — the same scientific engine is available without Qt and is exposed to the desktop app and SPMKit adapter.
+
+## Screenshots
+
+### Scientific workspace
+
+![Scientific workspace with calibrated measurement](docs/assets/workspace.png)
+
+### Built-in Quick Start
+
+![Fathom Fibers Quick Start](docs/assets/quick-start.png)
+
+The screenshots are deliberately based on synthetic data so they can be regenerated in CI without the private validation corpus:
 
 ```bash
-git clone <repository-url> fathom-fibers
+QT_QPA_PLATFORM=offscreen python scripts/capture_readme_screenshots.py
+```
+
+## Start from source
+
+```bash
+git clone https://github.com/kegouro/fathom-fibers.git
 cd fathom-fibers
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 python -m pip install -e ".[gui]"
 fathom-fibers
 ```
 
-Development setup:
+For development and validation tools:
 
 ```bash
 python -m pip install -e ".[gui,dev,validation]"
-QT_QPA_PLATFORM=offscreen python -m pytest -q
+OMP_NUM_THREADS=1 QT_QPA_PLATFORM=offscreen python -m pytest -q
+python -m ruff check .
 ```
 
-On Arch Linux, install Python and Qt's common runtime libraries first if needed:
+On Arch Linux, install Python and common OpenGL runtime libraries first if required:
 
 ```bash
 sudo pacman -S --needed python base-devel libglvnd
 ```
 
-The repository launcher uses `.venv`, writes logs below
-`/tmp/fathom-fibers-$USER/`, and can run checks before launch:
-
-```bash
-./scripts/run-fathom.sh
-./scripts/run-fathom.sh --check
-```
-
 ## Desktop workflow
 
-The Qt workspace has a project hierarchy, central scientific viewer, inspector,
-and bottom results/history/analysis/comparison panels. The viewer provides wheel
-zoom, pan, fit, 1:1 pixels, coordinates, raw pixel value, physical coordinates,
-scale bar, valid-image body/footer inspection, and non-destructive brightness,
-contrast, gamma and inversion.
+1. **Open a dataset** — choose the folder containing the SEM TIFF images. The dataset dock tracks cached/uncached analysis and manual progress per image.
+2. **Analyze** — run missing methods for the dataset or selected methods for the current image. Results are cached; normal navigation does not rerun algorithms.
+3. **Inspect distributions** — compare weighted histograms and ECDFs on identical units and bins, then inspect pairwise W1 / KS / median differences.
+4. **Review overlays and measurements** — inspect masks, centerlines, edges, rejected samples and individual measurement records.
+5. **Complete Manual 5×5 when required** — draw one perpendicular projected-width measurement at each target; every accepted measurement autosaves immediately.
+6. **Report** — generate the image or dataset scientific report and export the complete analysis bundle.
 
-Tools and shortcuts:
+The built-in Help dialog mirrors this workflow and documents the keyboard shortcuts.
 
-| Tool/action | Shortcut |
-|---|---|
-| Select | `V` |
-| Pan | `H` or hold `Space` |
-| Projected width | `M` |
-| Distance | `D` |
-| Polyline | `P`, `Enter` to finish |
-| Angle | `G` |
-| Rectangle ROI | `R` |
-| Polygon ROI | `Y`, `Enter` to finish |
-| Intensity profile | `L` |
-| Cancel | `Esc` |
-| Delete | `Delete` |
-| Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` |
-| Fit / 1:1 | `F` / `1` |
+## Methods and scientific status
 
-See [measurement workflow](docs/measurement-workflow.md) for review rules and
-estimand cautions.
+| Method / reference | Role | Status |
+|---|---|---|
+| MATLAB SIMPoly cache | External validated reference implementation | Optional validation adapter; never launched by the normal workspace |
+| Python SIMPoly | Source-compatible Python estimator | Validated approximation; exact MATLAB parity is **not** claimed |
+| Fathom Local | Local cross-section estimator | Implemented |
+| Fathom Field | EDT / paired-edge / intensity-profile estimator family | **Experimental** |
+| Oriented Ribbon V1 | Refined-centerline / local re-measurement approach | **Experimental** |
+| Manual 5×5 | Sparse human measurement protocol | Human reference, not absolute ground truth |
+| Consensus | Equal-method median quantile pseudo-reference | Pseudo-reference only |
 
-## Scientific workspace
+For unified comparisons, native estimands remain visible and the common comparison estimand is `COMMON_LENGTH_WEIGHTED_DIAMETER`. Agreement on real SEM images should be interpreted as **method agreement/behavior**, not proof of absolute accuracy.
 
-From one window the workspace opens a dataset, navigates all 16 images, loads or
-runs the unified methods, compares distributions, reviews individual field
-measurements and completes the manual 5×5 protocol.
+See [SIMPoly validation profile](docs/validation/simpoly-source-profile.md), [measurement workflow](docs/measurement-workflow.md) and [architecture](docs/architecture.md) for the exact caveats and contracts.
 
-1. **Launch** — `fathom-fibers` (or `./launch.py`).
-2. **Open dataset** — toolbar or *File → Open dataset*; choose the folder
-   containing your SEM TIFF images. The DATASET dock lists the images with
-   `complete / summary cache / not analyzed` status and per-image manual progress.
-3. **Run methods** — `R` opens the run dialog: Python SIMPoly, Fathom Local and
-   Fathom Field run in background workers; MATLAB is consumed from the validated
-   cache (never launched). Full results are cached per image under
-   `.validation/unified-method-comparison/full/`, so revisiting an image never
-   reruns algorithms. `Run missing` / `Run all dataset` fill the cache ahead of
-   time (`scripts/cache_workspace_results.py` does the same headless).
-4. **View distributions** — the DISTRIBUTIONS tab shows a weighted density
-   histogram and ECDF with identical bins and units across series, plus pairwise
-   Wasserstein-1 / KS / median-difference tables. Field EDT, Paired Edge and
-   Intensity Profile are estimator variants of one experimental method.
-5. **Manual 5×5** — the MANUAL 5×5 tab guides 25 targets per image: next target,
-   draw a perpendicular width line (`M`), measurement is accepted and autosaved
-   immediately. `Enter` next, `Backspace` previous, `Delete` remove, `Esc`
-   cancel. Progress is persisted per dataset (`.validation/…/manual5x5/`) so a
-   crash never loses the 400-measurement campaign.
-6. **Generate report** — *Report → Generate scientific report* (image,
-   `Ctrl+R`) or *Generate dataset scientific report*; both are headless HTML
-   reports with figures, written under `.validation/unified-method-comparison/`.
-7. **Export** — current-image CSV/JSON or dataset summary CSV.
-
-The UI contains no scientific algorithms: Qt widgets talk to the
-`WorkspaceController`, which orchestrates the Qt-free `workspace` layer,
-`FathomEngine`, `ProjectSession` and `MethodResult` contracts. The scientific
-core remains fully usable headless and never imports PySide6.
-
-## Headless API
+## Headless Python API
 
 ```python
 from fathom_fibers_quick.api import FathomEngine
@@ -131,6 +122,7 @@ line = engine.measure(
     "PROJECTED_WIDTH",
     {"p1": (120.0, 80.0), "p2": (120.0, 112.0)},
 )
+
 fathom = engine.run_fathom(image, roi_bbox=(100, 60, 500, 460))
 simpoly, intermediates = engine.run_simpoly(
     image,
@@ -141,67 +133,80 @@ comparison = engine.compare_methods(image, roi_bbox=(100, 60, 500, 460))
 unified = engine.compare_all_methods(image)
 ```
 
-Arrays are supported without filesystem access; calibration is always explicit.
-Full examples and contracts are in [docs/api.md](docs/api.md).
+Arrays are supported without filesystem access; calibration remains explicit. See [docs/api.md](docs/api.md) for the complete API contracts.
 
 ## CLI
 
 ```bash
-fathom-fibers                         # opens Qt
+fathom-fibers                         # open the Qt workspace
 fathom-fibers gui [image-or-project]
 fathom-fibers inspect --hash image.tif
 fathom-fibers inventory images/ -o inventory.csv
 fathom-fibers benchmark
-fathom-fibers oracle matlab check
-fathom-fibers oracle matlab probe
+
+fathom-fibers methods list
+fathom-fibers compare --image image.tif --matlab-cache-root /path/to/cache
+
 fathom-fibers campaign inventory
 fathom-fibers campaign run --methods matlab-simpoly,python-simpoly,fathom --resume
 fathom-fibers campaign report
-fathom-fibers methods list
-fathom-fibers compare --image image.tif --matlab-cache-root /path/to/.validation/real-tiff-campaign
-fathom-fibers campaign unified --dataset /path/to/16-tiffs --matlab-cache-root /path/to/.validation/real-tiff-campaign
+fathom-fibers campaign unified --dataset /path/to/tiffs --matlab-cache-root /path/to/cache
 fathom-fibers campaign unified-report
 ```
 
-MATLAB and the private TIFF corpus are optional validation adapters. The normal
-suite does not require either; licensed runtime tests are enabled explicitly with
-`FATHOM_MATLAB_EXECUTABLE=/path/to/matlab pytest -m matlab`.
+MATLAB and the private TIFF corpus are optional validation adapters. The normal test suite does not require either. Licensed MATLAB tests are opt-in:
 
-An offscreen-safe shell smoke test is available:
+```bash
+FATHOM_MATLAB_EXECUTABLE=/path/to/matlab pytest -m matlab
+```
+
+The frozen and source application both expose an offscreen-safe smoke test:
 
 ```bash
 QT_QPA_PLATFORM=offscreen fathom-fibers gui --smoke-test
 ```
 
-## Scientific scope
+## Architecture
 
-Fathom preserves Zeiss metadata, anisotropic calibration, measurement geometry,
-protocol snapshots, uncertainty, repeatability, hierarchical statistics,
-provenance, source hashes, autosave, undo/redo and atomic project persistence.
-The source-compatible SIMPoly port retains the source's algorithm order and
-literal decisions. R2026a probes establish parity for selected operations, but
-CLAHE, Canny, complex thickening, skeletonization, automatic histogram binning
-and nonlinear fitting are not claimed as exact MATLAB parity.
-See [SIMPoly validation profile](docs/validation/simpoly-source-profile.md).
+```text
+PySide6 UI
+   │
+   ▼
+WorkspaceController
+   │
+   ├── workspace / cache / reports
+   ├── ProjectSession
+   └── FathomEngine  ──► scientific algorithms + method contracts
+                            │
+                            ├── headless CLI / Python API
+                            └── SPMKit adapter
+```
 
-## Unified method comparison
+The scientific core does **not** import PySide6. UI widgets delegate domain work through the controller/session layers, which keeps scientific logic testable headlessly and makes alternative frontends possible.
 
-`FathomEngine.compare_all_methods()` adapts MATLAB SIMPoly cache results, Python
-SIMPoly, Fathom Local, manual records and the registered Field Graph backend to
-one typed `MethodResult`. The common comparison estimand is
-`COMMON_LENGTH_WEIGHTED_DIAMETER`; native estimands remain visible separately.
-The optional `CONSENSUS_PSEUDO_REFERENCE_V1` is a median quantile curve with
-equal method weight. It is never called ground truth.
+The legacy Tk application remains at `fathom_fibers_quick.app` for migration safety; the default entry point launches the PySide6 workspace.
 
-`FATHOM_FIELD_GRAPH_V1` is an experimental field-measuring backend: orientation
-field, anisotropic EDT radii and paired-edge metrology with intensity-profile
-refinement are implemented and reported with `EXPERIMENTAL_FIELD_MEASURING`
-status. Graph reconstruction, crossing resolution and fiber instances are not
-implemented and are not hidden. Future Omnipose, instance embedding and ML
-perception backends use the Qt-free `FiberPerceptionBackend` contract; no model
-runtime is installed.
+## Releases
 
-The old Tk application remains at `fathom_fibers_quick.app` for migration safety;
-the default entrypoint now launches Qt. Scientific code does not import Qt or
-SPMKit. Architecture and remaining limitations are documented in
-[docs/architecture.md](docs/architecture.md).
+Native release builds are produced on GitHub-hosted runners for:
+
+- Ubuntu / Linux x86_64
+- Windows x86_64
+- macOS Apple Silicon (arm64)
+- macOS Intel (x86_64)
+
+A `v*` tag runs the full source gates, builds each platform natively with PyInstaller, runs release verification, uploads checksums and publishes a GitHub Release. Release artifacts embed source commit/build provenance.
+
+The release process intentionally performs **no cross-compilation**: Windows and macOS packages are built on their native runners.
+
+## Reproducibility and scope
+
+Fathom preserves calibration, source hashes, geometry, protocol snapshots, uncertainty fields, repeatability metadata, review status, autosave history and atomic project persistence where applicable.
+
+The source-compatible SIMPoly port retains the source algorithm order and literal decisions, but R2026a probes do **not** justify claiming exact parity for every dependency-level operation. In particular, CLAHE, Canny, complex thickening, skeletonization, automatic histogram binning and nonlinear fitting must be interpreted according to the validation profile.
+
+Current limitations are documented explicitly in [STATUS.md](STATUS.md). The project does not claim production readiness, universal fiber-instance reconstruction, or known absolute accuracy on real SEM data.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

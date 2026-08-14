@@ -22,7 +22,7 @@ from .parity_metrics import first_divergence
 
 DATASET_ID = "ZEISS_PVDF_2026-07-30"
 EXPECTED_CASES = 16
-DEFAULT_DATASET = Path("data/zeiss")
+DEFAULT_DATASET = Path("local_data/zeiss/30-07-26")
 PIPELINE_VERSION = "MATLAB_ORACLE_R2026A_V1"
 
 INVENTORY_FIELDS = (

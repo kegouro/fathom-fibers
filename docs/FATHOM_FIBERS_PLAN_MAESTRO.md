@@ -1692,7 +1692,7 @@ from fathom_fibers import (
 ## 16.1 Headless
 
 ```python
-image = load_image("sample.tif")
+image = load_image("PVDF Jose_01.tif")
 project = create_project(image)
 result = run_analysis(project, recipe="zeiss_usm_nonwoven")
 export_project(result, "out/")

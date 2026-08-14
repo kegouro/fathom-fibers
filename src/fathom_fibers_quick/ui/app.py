@@ -13,7 +13,6 @@ from ..api import FathomEngine
 from ..application import ProjectSession
 from ..model import Calibration
 from .main_window import MainWindow
-from .theme import apply_theme
 
 
 def _configure_logging() -> None:
@@ -55,7 +54,6 @@ def launch(
     app = QApplication.instance() or QApplication(argv or sys.argv)
     app.setApplicationName("Fathom Fibers")
     app.setOrganizationName("Fathom")
-    apply_theme(app)
     session = ProjectSession(FathomEngine())
     window = MainWindow(session, initial_path=initial_path, smoke_test=smoke_test)
     window.show()
